@@ -122,6 +122,16 @@ class Settings(BaseSettings):
     )
     gemini_model: str = "gemini-2.0-flash-exp"  # Maps to GEMINI_MODEL (Vertex AI: gemini-2.0-flash-exp, gemini-2.5-flash, gemini-2.5-pro)
 
+    # Verification (optional overrides to avoid sharing the same Gemini setup)
+    # If set, the verification agent will use these instead of the default Gemini settings.
+    verification_gemini_api_key: str | None = None  # VERIFICATION_GEMINI_API_KEY
+    verification_google_application_credentials: str | None = (
+        None  # VERIFICATION_GOOGLE_APPLICATION_CREDENTIALS
+    )
+    verification_gcp_project_id: str | None = None  # VERIFICATION_GCP_PROJECT_ID
+    verification_gcp_location: str | None = None  # VERIFICATION_GCP_LOCATION
+    verification_gemini_model: str | None = None  # VERIFICATION_GEMINI_MODEL
+
     # GitHub API
     git_access_token: str | None = None  # Maps to GIT_ACCESS_TOKEN
     git_client_id: str | None = None  # Maps to GIT_CLIENT_ID

@@ -122,7 +122,10 @@ class VerificationAgent:
     def __init__(self):
         from app.services.gemini_service import get_gemini_service
 
-        self.gemini_service = get_gemini_service()
+        # Use a separate GeminiService instance/config for verification so it can
+        # be pointed at a different model/project/credentials via VERIFICATION_*
+        # env vars (reduces contention with roadmap/content generation).
+        self.gemini_service = get_gemini_service(purpose="verification")
         self.github_tools = get_github_tools()
         self.max_iterations = 5  # Maximum tool call iterations
 
@@ -250,7 +253,7 @@ class VerificationAgent:
                     messages=messages,
                     tools=self.github_tools,
                     temperature=0.0,  # Strict mode
-                    max_tokens=4000,
+                    max_tokens=2000,
                 )
                 logger.debug("   ✅ Gemini API response received")
             except Exception as e:
@@ -323,6 +326,28 @@ class VerificationAgent:
                         arguments=function_args,
                         github_token=github_token,
                     )
+
+                    # Prevent huge prompts: file contents can be very large and
+                    # get echoed back into the next LLM call as tool messages.
+                    # Truncate safely while preserving useful context.
+                    if (
+                        function_name == "get_file_contents"
+                        and isinstance(tool_result, dict)
+                        and tool_result.get("success") is True
+                        and isinstance(tool_result.get("content"), str)
+                    ):
+                        content = tool_result["content"]
+                        max_chars = 20000
+                        if len(content) > max_chars:
+                            head = content[:16000]
+                            tail = content[-3000:]
+                            tool_result["content"] = (
+                                head
+                                + "\n\n...[TRUNCATED tool output: file content was "
+                                + str(len(content))
+                                + " chars]...\n\n"
+                                + tail
+                            )
 
                     # Log tool result summary
                     success = tool_result.get("success", False)

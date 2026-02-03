@@ -33,61 +33,78 @@ GEMINI_API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
 )
 
-# Lazy singleton instance
-_gemini_service_instance = None
+# Lazy singleton instances (per purpose)
+_gemini_service_instances: dict[str, "GeminiService"] = {}
 
 
-def get_gemini_service() -> "GeminiService":
+def get_gemini_service(purpose: str = "default") -> "GeminiService":
     """
     Get or create singleton GeminiService instance (lazy initialization).
 
     Returns:
         GeminiService: Singleton instance
     """
-    global _gemini_service_instance
+    global _gemini_service_instances
 
-    if _gemini_service_instance is None:
-        logger.info("🤖 Initializing GeminiService (first use)...")
-        _gemini_service_instance = GeminiService()
-        logger.info("✅ GeminiService ready (will reuse for future requests)")
+    key = purpose or "default"
+    if key not in _gemini_service_instances:
+        logger.info(f"🤖 Initializing GeminiService (purpose={key})...")
+        _gemini_service_instances[key] = GeminiService(purpose=key)
+        logger.info(f"✅ GeminiService ready (purpose={key}, will reuse for future requests)")
 
-    return _gemini_service_instance
+    return _gemini_service_instances[key]
 
 
 class GeminiService:
     """Google Gemini service for high-quality content generation."""
 
-    def __init__(self):
+    def __init__(self, purpose: str = "default"):
         """
         Initialize GeminiService with rate limiting and retry logic.
         Supports both API key and service account authentication.
         """
+        self.purpose = purpose or "default"
         self.use_service_account = False
         self.api_key = None
         self.project_id = None
         self.location = None
-        # Default model: gemini-1.5-flash for Vertex AI (faster, cheaper)
-        # For direct API: gemini-pro works
-        self.model = (
-            settings.gemini_model if hasattr(settings, "gemini_model") else "gemini-1.5-flash"
-        )
+
+        # Purpose-specific overrides (used to avoid sharing the same Gemini configuration)
+        if self.purpose == "verification":
+            effective_model = settings.verification_gemini_model or settings.gemini_model
+            effective_project_id = settings.verification_gcp_project_id or settings.gcp_project_id
+            effective_location = (
+                settings.verification_gcp_location or settings.gcp_location or "global"
+            )
+            effective_creds = (
+                settings.verification_google_application_credentials
+                or settings.google_application_credentials
+            )
+            effective_api_key = settings.verification_gemini_api_key or settings.gemini_api_key
+        else:
+            effective_model = settings.gemini_model
+            effective_project_id = settings.gcp_project_id
+            effective_location = settings.gcp_location or "global"
+            effective_creds = settings.google_application_credentials
+            effective_api_key = settings.gemini_api_key
+
+        # Default model: gemini-2.x/2.5.x for Vertex AI
+        self.model = effective_model if effective_model else "gemini-2.0-flash-exp"
         self.timeout = 180.0  # 180 seconds timeout
         self.rate_limiter = get_rate_limiter()
 
         # Check for service account (preferred method - uses GCP free credits)
-        if settings.google_application_credentials:
-            creds_path = Path(settings.google_application_credentials)
+        if effective_creds:
+            creds_path = Path(effective_creds)
             if not creds_path.is_absolute():
                 creds_path = PROJECT_ROOT / creds_path
 
             if creds_path.exists():
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(creds_path)
                 self.use_service_account = True
-                self.project_id = settings.gcp_project_id
+                self.project_id = effective_project_id
                 # Default to 'global' - required for Gemini publisher models
-                self.location = (
-                    settings.gcp_location if hasattr(settings, "gcp_location") else "global"
-                )
+                self.location = effective_location
 
                 if not self.project_id:
                     logger.warning("⚠️ GCP_PROJECT_ID not set. Reading from JSON file...")
@@ -125,10 +142,8 @@ class GeminiService:
                 creds, adc_project_id = google.auth.default()
                 if creds:
                     self.use_service_account = True
-                    self.project_id = settings.gcp_project_id or adc_project_id
-                    self.location = (
-                        settings.gcp_location if hasattr(settings, "gcp_location") else "global"
-                    )
+                    self.project_id = effective_project_id or adc_project_id
+                    self.location = effective_location
 
                     if not self.project_id:
                         raise ValueError(
@@ -149,16 +164,17 @@ class GeminiService:
 
         # Fallback to API key method
         if not self.use_service_account:
-            if not settings.gemini_api_key:
+            if not effective_api_key:
                 raise ValueError(
                     "Neither GOOGLE_APPLICATION_CREDENTIALS nor GEMINI_API_KEY is configured. "
                     "Please set one of them in your .env file."
                 )
-            self.api_key = settings.gemini_api_key
+            self.api_key = effective_api_key
             logger.info("✅ Using Gemini with API Key")
             logger.debug(f"   Model: {self.model}")
 
         logger.info("✅ GeminiService initialized")
+        logger.info(f"   🎯 Purpose: {self.purpose}")
         logger.info(f"   🤖 Model: {self.model}")
         logger.info(f"   🌍 Location: {self.location} (will use 'global' for Gemini models)")
         logger.info(
@@ -191,7 +207,7 @@ class GeminiService:
             Generated response string
         """
         # Acquire rate limit permission
-        await self.rate_limiter.acquire()
+        await self.rate_limiter.acquire(identifier=f"gemini:{self.purpose}")
 
         # Additional delay for better rate limit compliance
         await asyncio.sleep(0.5)
@@ -487,7 +503,7 @@ class GeminiService:
             }
         """
         # Acquire rate limit permission
-        await self.rate_limiter.acquire()
+        await self.rate_limiter.acquire(identifier=f"gemini:{self.purpose}")
         await asyncio.sleep(0.5)
 
         # Use Vertex AI for function calling (better support)
@@ -524,6 +540,19 @@ class GeminiService:
                 "usage": None,
             }
 
+    @retry(
+        stop=stop_after_attempt(5),  # More attempts for rate limits
+        wait=wait_exponential(multiplier=2, min=5, max=120),  # 5s, 10s, 20s, 40s, 80s
+        retry=retry_if_exception_type(
+            (
+                google_exceptions.TooManyRequests,
+                google_exceptions.ResourceExhausted,
+            )
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        after=after_log(logger, logging.INFO),
+        reraise=True,
+    )
     async def _generate_with_tools_vertex_ai(
         self,
         messages: list[dict[str, Any]],
@@ -710,6 +739,38 @@ class GeminiService:
                 "Install with: pip install google-cloud-aiplatform"
             )
             raise
+        except google_exceptions.TooManyRequests as e:
+            logger.warning(
+                f"⏳ Gemini API rate limit exceeded (429). Retrying with exponential backoff... "
+                f"Error: {e}"
+            )
+            raise  # Let retry decorator handle it
+        except google_exceptions.ResourceExhausted as e:
+            logger.warning(
+                f"⏳ Gemini API resource exhausted (429). Retrying with exponential backoff... "
+                f"Error: {e}"
+            )
+            raise  # Let retry decorator handle it
         except Exception as e:
-            logger.error(f"❌ Error generating response with tools: {e}", exc_info=True)
+            error_msg = str(e)
+            if "404" in error_msg or "NOT_FOUND" in error_msg:
+                logger.error(
+                    f"❌ Model '{self.model}' not found in Vertex AI.\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔧 QUICK FIX - Enable Vertex AI API:\n"
+                    f"   1. Go to: https://console.cloud.google.com/apis/library/aiplatform.googleapis.com\n"
+                    f"   2. Select project: {self.project_id}\n"
+                    f"   3. Click 'Enable' button\n"
+                    f"   4. Wait 1-2 minutes, then restart your server\n"
+                    f"\n"
+                    f"🔐 GRANT PERMISSIONS:\n"
+                    f"   1. Go to: https://console.cloud.google.com/iam-admin/iam?project={self.project_id}\n"
+                    f"   2. Find: gemini-api-service@{self.project_id}.iam.gserviceaccount.com\n"
+                    f"   3. Add role: 'Vertex AI User' (roles/aiplatform.user)\n"
+                    f"\n"
+                    f"📖 Full setup guide: See SETUP_VERTEX_AI.md\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+            else:
+                logger.error(f"❌ Error generating response with tools: {e}", exc_info=True)
             raise

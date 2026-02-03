@@ -84,6 +84,14 @@ class RedisRateLimiter:
         self.key_prefix = key_prefix
         self.min_delay_between_requests = min_delay_between_requests
         self.last_request_time = 0.0
+        # IMPORTANT: if Redis is not configured/available, we must keep state
+        # across calls. Creating a new in-memory limiter per acquire() would
+        # effectively disable window-based limiting.
+        self._fallback_limiter = InMemoryRateLimiter(
+            max_requests=max_requests,
+            window_seconds=window_seconds,
+            min_delay=min_delay_between_requests,
+        )
 
     async def acquire(self, identifier: str = "default"):
         """
@@ -107,11 +115,8 @@ class RedisRateLimiter:
             now = time.time()
 
         if not self.redis_client:
-            # Fallback to in-memory if Redis not available
-            fallback = InMemoryRateLimiter(
-                self.max_requests, self.window_seconds, self.min_delay_between_requests
-            )
-            result = await fallback.acquire()
+            # Fallback to in-memory if Redis not available (stateful)
+            result = await self._fallback_limiter.acquire()
             self.last_request_time = time.time()
             return result
 
@@ -156,10 +161,7 @@ class RedisRateLimiter:
 
         except Exception as e:
             logger.warning(f"⚠️  Redis rate limiter error: {e}, falling back to in-memory")
-            fallback = InMemoryRateLimiter(
-                self.max_requests, self.window_seconds, self.min_delay_between_requests
-            )
-            result = await fallback.acquire()
+            result = await self._fallback_limiter.acquire()
             self.last_request_time = time.time()
             return result
 
