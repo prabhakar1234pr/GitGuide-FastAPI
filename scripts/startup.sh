@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Startup script for Cloud Run
 # Writes service account credentials from environment variable to file
 
