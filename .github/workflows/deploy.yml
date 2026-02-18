@@ -221,16 +221,32 @@ jobs:
       - name: Deploy to Workspace VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          REPO_CLONE_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          REPO_CLONE_TOKEN: ${{ secrets.REPO_CLONE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          envs: REPO_CLONE_URL
+          envs: REPO_CLONE_TOKEN,GITHUB_TOKEN,GITHUB_REPOSITORY
           command_timeout: 15m
           script: |
             set -e
             export PATH="$HOME/.local/bin:$PATH"
+
+            if [ -n "$REPO_CLONE_TOKEN" ]; then
+              REPO_CLONE_URL="https://${REPO_CLONE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            else
+              REPO_CLONE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            fi
+
+            ensure_uv() {
+              if ! command -v uv >/dev/null 2>&1; then
+                echo "Installing uv..."
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                export PATH="$HOME/.local/bin:$PATH"
+              fi
+            }
 
             if [ ! -d /opt/gitguide-backend ]; then
               echo "Bootstrap: installing dependencies..."
@@ -240,9 +256,7 @@ jobs:
               sudo systemctl enable docker
               sudo systemctl start docker
 
-              echo "Bootstrap: installing uv..."
-              curl -LsSf https://astral.sh/uv/install.sh | sh
-              export PATH="$HOME/.local/bin:$PATH"
+              ensure_uv
 
               echo "Bootstrap: cloning repo..."
               sudo mkdir -p /opt
@@ -250,7 +264,7 @@ jobs:
               sudo chown -R $USER:$USER /opt/gitguide-backend
 
               cd /opt/gitguide-backend
-              echo "Bootstrap: syncing Python deps (uv handles Python 3.12)..."
+              echo "Bootstrap: syncing Python deps..."
               uv sync
 
               echo "Bootstrap: building workspace Docker image..."
@@ -264,6 +278,7 @@ jobs:
               echo "Bootstrap complete."
             else
               cd /opt/gitguide-backend
+              git remote set-url origin "$REPO_CLONE_URL"
               git fetch origin main && git reset --hard origin/main
 
               if [ -d .venv ]; then
@@ -271,12 +286,8 @@ jobs:
                 find .venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
               fi
 
-              if command -v uv >/dev/null 2>&1; then
-                uv sync --frozen || uv sync
-              else
-                export PATH="$HOME/.local/bin:$PATH"
-                uv sync --frozen || uv sync
-              fi
+              ensure_uv
+              uv sync --frozen || uv sync
 
               sudo systemctl restart gitguide-workspaces
               echo "VM deploy complete."
