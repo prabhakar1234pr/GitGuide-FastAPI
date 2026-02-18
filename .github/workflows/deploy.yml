@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
 
 env:
-  PROJECT_ID: gitguide-backend
+  PROJECT_ID: g1901-487423
   REGION: us-central1
   GAR_LOCATION: us-central1-docker.pkg.dev
   AR_REPO: gitguide
-  CLOUD_RUN_RUNTIME_SA: gemini-api-service@gitguide-backend.iam.gserviceaccount.com
+  CLOUD_RUN_RUNTIME_SA: gemini-api-service@g1901-487423.iam.gserviceaccount.com
 
 jobs:
   ci:
