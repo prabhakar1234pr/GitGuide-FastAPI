@@ -226,19 +226,37 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
             set -e
-            cd /opt/gitguide-backend
-            git fetch origin main && git reset --hard origin/main
+            REPO_URL="https://github.com/${{ github.repository }}.git"
 
-            # Fix permissions on venv if needed, then sync
-            if [ -d .venv ]; then
-              sudo chown -R $USER:$USER .venv 2>/dev/null || true
-              find .venv -type d -name __pycache__ -exec sudo rm -rf {} + 2>/dev/null || true
+            if [ ! -d /opt/gitguide-backend ]; then
+              echo "Bootstrap: cloning repo to /opt/gitguide-backend..."
+              sudo mkdir -p /opt
+              sudo git clone $REPO_URL /opt/gitguide-backend
+              sudo chown -R $USER:$USER /opt/gitguide-backend
+              cd /opt/gitguide-backend
+              python3 -m venv .venv
+              source .venv/bin/activate
+              pip install uv
+              uv sync
+              sudo cp scripts/gitguide-workspaces.service /etc/systemd/system/
+              sudo systemctl daemon-reload
+              sudo systemctl enable gitguide-workspaces
+              sudo systemctl start gitguide-workspaces || true
+              echo "Bootstrap complete."
+            else
+              cd /opt/gitguide-backend
+              git fetch origin main && git reset --hard origin/main
+
+              if [ -d .venv ]; then
+                sudo chown -R $USER:$USER .venv 2>/dev/null || true
+                find .venv -type d -name __pycache__ -exec sudo rm -rf {} + 2>/dev/null || true
+              fi
+
+              source .venv/bin/activate
+              uv sync --frozen || uv sync
+              sudo systemctl restart gitguide-workspaces
+              echo "VM deploy complete."
             fi
-
-            source .venv/bin/activate
-            uv sync --frozen || uv sync
-            sudo systemctl restart gitguide-workspaces
-            echo "VM deploy complete."
 
       - name: Health check (Workspace VM service)
         uses: appleboy/ssh-action@v1.0.3
