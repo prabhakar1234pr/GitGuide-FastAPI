@@ -227,23 +227,40 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           envs: REPO_CLONE_URL
+          command_timeout: 15m
           script: |
             set -e
+            export PATH="$HOME/.local/bin:$PATH"
 
             if [ ! -d /opt/gitguide-backend ]; then
-              echo "Bootstrap: cloning repo to /opt/gitguide-backend..."
+              echo "Bootstrap: installing dependencies..."
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq git curl ca-certificates
+              sudo apt-get install -y -qq docker.io
+              sudo systemctl enable docker
+              sudo systemctl start docker
+
+              echo "Bootstrap: installing uv..."
+              curl -LsSf https://astral.sh/uv/install.sh | sh
+              export PATH="$HOME/.local/bin:$PATH"
+
+              echo "Bootstrap: cloning repo..."
               sudo mkdir -p /opt
               sudo git clone "$REPO_CLONE_URL" /opt/gitguide-backend
               sudo chown -R $USER:$USER /opt/gitguide-backend
+
               cd /opt/gitguide-backend
-              python3 -m venv .venv
-              source .venv/bin/activate
-              pip install uv
+              echo "Bootstrap: syncing Python deps (uv handles Python 3.12)..."
               uv sync
+
+              echo "Bootstrap: building workspace Docker image..."
+              sudo docker build -t gitguide-workspace:latest -f docker/Dockerfile.workspace .
+
+              echo "Bootstrap: installing systemd service..."
               sudo cp scripts/gitguide-workspaces.service /etc/systemd/system/
               sudo systemctl daemon-reload
               sudo systemctl enable gitguide-workspaces
-              sudo systemctl start gitguide-workspaces || true
+              sudo systemctl start gitguide-workspaces 2>/dev/null || echo "Note: Add /opt/gitguide-backend/.env and run: sudo systemctl start gitguide-workspaces"
               echo "Bootstrap complete."
             else
               cd /opt/gitguide-backend
@@ -251,11 +268,16 @@ jobs:
 
               if [ -d .venv ]; then
                 sudo chown -R $USER:$USER .venv 2>/dev/null || true
-                find .venv -type d -name __pycache__ -exec sudo rm -rf {} + 2>/dev/null || true
+                find .venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
               fi
 
-              source .venv/bin/activate
-              uv sync --frozen || uv sync
+              if command -v uv >/dev/null 2>&1; then
+                uv sync --frozen || uv sync
+              else
+                export PATH="$HOME/.local/bin:$PATH"
+                uv sync --frozen || uv sync
+              fi
+
               sudo systemctl restart gitguide-workspaces
               echo "VM deploy complete."
             fi
