@@ -289,6 +289,13 @@ jobs:
               ensure_uv
               uv sync --frozen || uv sync
 
+              if [ ! -f /etc/systemd/system/gitguide-workspaces.service ]; then
+                echo "Installing systemd service..."
+                sudo cp scripts/gitguide-workspaces.service /etc/systemd/system/
+                sudo systemctl daemon-reload
+                sudo systemctl enable gitguide-workspaces
+              fi
+
               sudo systemctl restart gitguide-workspaces
               echo "VM deploy complete."
             fi
