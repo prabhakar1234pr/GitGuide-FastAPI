@@ -18,8 +18,8 @@ from app.services.rate_limiter import initialize_rate_limiter
 logger = logging.getLogger(__name__)
 
 
-def _is_roadmap_reachable(base_url: str) -> bool:
-    """Check if roadmap service is reachable (sync, for use in thread)."""
+def _is_service_reachable(base_url: str) -> bool:
+    """Check if a service is reachable via its /health endpoint (sync, for use in thread)."""
     try:
         import httpx
 
@@ -43,35 +43,29 @@ def _docker_available() -> bool:
         return False
 
 
-def _ensure_roadmap_container_sync() -> bool:
+def _ensure_container_sync(service_name: str, base_url: str) -> bool:
     """
-    If roadmap URL points to localhost and service is unreachable, start it via docker-compose.
-    Returns True if roadmap is (or became) reachable, False otherwise.
+    If service is unreachable, start it via docker-compose.
+    Returns True if service is (or became) reachable, False otherwise.
     """
-    url = settings.roadmap_service_url
-    if not url or "localhost" not in url.lower() and "127.0.0.1" not in url:
-        return False
-
-    base = urlparse(url)
-    base_url = f"{base.scheme}://{base.netloc}"
-    if _is_roadmap_reachable(base_url):
+    if _is_service_reachable(base_url):
         return True
 
     if not _docker_available():
         logger.warning(
-            "⚠️  Roadmap service not reachable and Docker not available. "
-            "Start it manually: docker-compose up roadmap -d"
+            f"⚠️  {service_name} not reachable and Docker not available. "
+            f"Start manually: docker-compose up {service_name} -d"
         )
         return False
 
     compose_file = PROJECT_ROOT / "docker-compose.yml"
     if not compose_file.exists():
-        logger.warning("⚠️  docker-compose.yml not found - cannot auto-start roadmap service")
+        logger.warning(f"⚠️  docker-compose.yml not found - cannot auto-start {service_name}")
         return False
 
     for cmd in [
-        ["docker", "compose", "up", "roadmap", "-d"],
-        ["docker-compose", "up", "roadmap", "-d"],
+        ["docker", "compose", "up", service_name, "-d"],
+        ["docker-compose", "up", service_name, "-d"],
     ]:
         try:
             result = subprocess.run(
@@ -83,13 +77,15 @@ def _ensure_roadmap_container_sync() -> bool:
                 env=os.environ.copy(),
             )
             if result.returncode == 0:
-                logger.info("🐳 Started roadmap container via docker-compose")
+                logger.info(f"🐳 Started {service_name} container via docker-compose")
                 for _ in range(12):  # wait up to ~12 seconds
                     time.sleep(1)
-                    if _is_roadmap_reachable(base_url):
-                        logger.info("✅ Roadmap service is now reachable")
+                    if _is_service_reachable(base_url):
+                        logger.info(f"✅ {service_name} service is now reachable")
                         return True
-                logger.warning("⚠️  Roadmap container started but health check not ready yet")
+                logger.warning(
+                    f"⚠️  {service_name} container started but health check not ready yet"
+                )
                 return True
             else:
                 logger.debug(f"docker-compose failed (tried {cmd[0]}): {result.stderr}")
@@ -99,9 +95,25 @@ def _ensure_roadmap_container_sync() -> bool:
             continue
 
     logger.warning(
-        "⚠️  Could not start roadmap container. Run manually: docker-compose up roadmap -d"
+        f"⚠️  Could not start {service_name} container. Run manually: docker-compose up {service_name} -d"
     )
     return False
+
+
+def _ensure_roadmap_container_sync() -> bool:
+    """Auto-start roadmap if ROADMAP_SERVICE_URL points to localhost and service is unreachable."""
+    url = settings.roadmap_service_url
+    if not url or "localhost" not in url.lower() and "127.0.0.1" not in url:
+        return False
+    base = urlparse(url)
+    base_url = f"{base.scheme}://{base.netloc}"
+    return _ensure_container_sync("roadmap", base_url)
+
+
+def _ensure_workspaces_container_sync() -> bool:
+    """Auto-start workspaces when running backend locally (needed for editor/terminal/preview)."""
+    base_url = "http://127.0.0.1:8002"
+    return _ensure_container_sync("workspaces", base_url)
 
 
 async def resume_stuck_projects():
@@ -250,12 +262,16 @@ async def startup_services():
     """
     logger.info("🚀 Initializing application services...")
 
-    # Auto-start roadmap container when running locally (ROADMAP_SERVICE_URL with localhost)
+    # Auto-start roadmap + workspaces containers when running backend locally
     if settings.roadmap_service_url:
         try:
             await asyncio.to_thread(_ensure_roadmap_container_sync)
         except Exception as e:
             logger.warning(f"⚠️  Roadmap auto-start check failed: {e}")
+    try:
+        await asyncio.to_thread(_ensure_workspaces_container_sync)
+    except Exception as e:
+        logger.warning(f"⚠️  Workspaces auto-start check failed: {e}")
 
     # Initialize rate limiter (will use Redis if available, fallback otherwise)
     try:

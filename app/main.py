@@ -126,9 +126,18 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
 # Add CORS middleware - configured from settings
+# In production with allow_credentials=True, "*" is invalid per CORS spec - use explicit origins
+_cors_origins = settings.cors_origins
+if settings.environment == "production" and (
+    _cors_origins == ["*"] or (isinstance(_cors_origins, list) and "*" in _cors_origins)
+):
+    _cors_origins = [
+        "https://gitguide.dev",
+        "https://www.gitguide.dev",
+    ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
