@@ -1,9 +1,9 @@
 """
 Embedding Service with support for multiple providers:
-- Vertex AI (Google Cloud) - Recommended for GCP deployments
-- OpenAI - Cost-effective API option
-- Hugging Face - With API token support
-- Local - Self-hosted sentence-transformers
+- vertex_ai: Google Vertex AI (requires GCP project + service account with Vertex AI User)
+- gemini_api: Gemini API with API key (no GCP permissions needed)
+- openai: OpenAI embeddings
+- huggingface / local: Hugging Face / sentence-transformers
 """
 
 import logging
@@ -41,10 +41,10 @@ def get_embedding_service() -> "EmbeddingService":
 class EmbeddingService:
     """
     Embedding service supporting multiple providers:
-    - vertex_ai: Google Vertex AI embeddings (best for GCP deployments)
-    - openai: OpenAI embeddings (cost-effective: $0.02/1M tokens)
-    - huggingface: Hugging Face with API token (avoids rate limits)
-    - local: Self-hosted sentence-transformers (no API costs)
+    - vertex_ai: Google Vertex AI (requires GCP + service account)
+    - gemini_api: Gemini API with API key (no GCP permissions)
+    - openai: OpenAI embeddings
+    - huggingface / local: Hugging Face / sentence-transformers
     """
 
     def __init__(self):
@@ -52,12 +52,15 @@ class EmbeddingService:
         self.provider = settings.embedding_provider.lower()
         self.model = None
         self._vertex_ai_client = None
+        self._gemini_api_client = None
         self._openai_client = None
 
         logger.info(f"🤖 Initializing EmbeddingService with provider: {self.provider}")
 
         if self.provider == "vertex_ai":
             self._init_vertex_ai()
+        elif self.provider == "gemini_api":
+            self._init_gemini_api()
         elif self.provider == "openai":
             self._init_openai()
         elif self.provider == "huggingface":
@@ -67,7 +70,7 @@ class EmbeddingService:
         else:
             raise ValueError(
                 f"Unknown embedding provider: {self.provider}. "
-                "Supported: vertex_ai, openai, huggingface, local"
+                "Supported: vertex_ai, gemini_api, openai, huggingface, local"
             )
 
     def _init_vertex_ai(self):
@@ -210,6 +213,33 @@ class EmbeddingService:
             )
             raise
 
+    def _init_gemini_api(self):
+        """Initialize Gemini API embeddings (uses GEMINI_API_KEY, no GCP permissions)."""
+        try:
+            from google import genai
+
+            api_key = settings.gemini_api_key
+            if not api_key:
+                raise ValueError(
+                    "GEMINI_API_KEY is required for Gemini API embeddings. Set it in your .env file."
+                )
+
+            self._gemini_api_client = genai.Client(api_key=api_key)
+            model_name = (
+                settings.embedding_model_name
+                if settings.embedding_model_name.startswith("models/")
+                else f"models/{settings.embedding_model_name}"
+            )
+            logger.info(f"✅ Gemini API embeddings initialized: {model_name}")
+        except ImportError as e:
+            raise ImportError(
+                "google-genai is required for Gemini API embeddings. "
+                "Install it: pip install google-genai"
+            ) from e
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini API: {e}")
+            raise
+
     def _init_openai(self):
         """Initialize OpenAI embeddings."""
         try:
@@ -306,6 +336,8 @@ class EmbeddingService:
         try:
             if self.provider == "vertex_ai":
                 embeddings = self._embed_vertex_ai(texts)
+            elif self.provider == "gemini_api":
+                embeddings = self._embed_gemini_api(texts)
             elif self.provider == "openai":
                 embeddings = self._embed_openai(texts)
             elif self.provider in ("huggingface", "local"):
@@ -334,6 +366,44 @@ class EmbeddingService:
         embeddings = self._vertex_ai_client.get_embeddings(texts)
         # Vertex AI returns list of EmbeddingValue objects
         return [emb.values for emb in embeddings]
+
+    def _embed_gemini_api(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings using Gemini API (API key, no GCP permissions)."""
+        model_name = (
+            settings.embedding_model_name
+            if settings.embedding_model_name.startswith("models/")
+            else f"models/{settings.embedding_model_name}"
+        )
+        batch_size = 50
+        all_embeddings = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            result = self._gemini_api_client.models.embed_content(
+                model=model_name,
+                contents=batch,
+            )
+
+            # Response has .embeddings (list) or .embedding (single)
+            def _extract_values(emb) -> list[float]:
+                if hasattr(emb, "values"):
+                    v = emb.values
+                elif isinstance(emb, (list, tuple)):
+                    v = emb
+                else:
+                    v = list(emb)
+                return list(v) if not isinstance(v, list) else v
+
+            if hasattr(result, "embeddings") and result.embeddings:
+                for emb in result.embeddings:
+                    all_embeddings.append(_extract_values(emb))
+            elif hasattr(result, "embedding") and result.embedding:
+                all_embeddings.append(_extract_values(result.embedding))
+            else:
+                raise ValueError(
+                    f"Unexpected embed_content response: {type(result)}, "
+                    "expected .embeddings or .embedding"
+                )
+        return all_embeddings
 
     def _embed_openai(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using OpenAI API."""

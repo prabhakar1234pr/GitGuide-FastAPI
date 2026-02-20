@@ -68,7 +68,9 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = None
 
     # Embedding Settings
-    embedding_provider: str = "vertex_ai"  # Options: "vertex_ai", "openai", "huggingface", "local"
+    embedding_provider: str = (
+        "gemini_api"  # vertex_ai, gemini_api (no GCP perms), openai, huggingface, local
+    )
     embedding_model_name: str = "gemini-embedding-001"  # Vertex AI model name (state-of-the-art, supports English, multilingual, and code)
     openai_embedding_model: str = "text-embedding-3-small"  # OpenAI model name
     openai_api_key: str | None = None  # Maps to OPENAI_API_KEY (for embeddings)

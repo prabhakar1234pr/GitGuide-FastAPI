@@ -7,6 +7,8 @@ validated structured outputs (Pydantic models) from the LLM.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from functools import lru_cache
 from typing import Any
 
@@ -34,6 +36,28 @@ def _google_vertex_model() -> GoogleModel:
     return GoogleModel(settings.gemini_model, provider=provider)
 
 
+# Models that work with Gemini API (generativelanguage.googleapis.com).
+# gemini-2.0-flash-exp, gemini-1.5-flash are Vertex-only or deprecated.
+_GEMINI_API_AVAILABLE_MODELS = (
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
+)
+
+
+def _model_for_gemini_api() -> str:
+    """Use a model available on Gemini API. Lite has separate/higher free-tier quota."""
+    m = settings.gemini_model or ""
+    if m in _GEMINI_API_AVAILABLE_MODELS:
+        return m
+    # Default to lite - often has quota when main flash is exhausted
+    return "gemini-2.0-flash-lite"
+
+
 @lru_cache
 def _google_gla_model() -> GoogleModel:
     """
@@ -45,7 +69,8 @@ def _google_gla_model() -> GoogleModel:
             "Neither Vertex AI (GCP_PROJECT_ID/ADC) nor GEMINI_API_KEY is configured for structured outputs"
         )
     provider = GoogleProvider(api_key=settings.gemini_api_key)
-    return GoogleModel(settings.gemini_model, provider=provider)
+    model_name = _model_for_gemini_api()
+    return GoogleModel(model_name, provider=provider)
 
 
 def _google_provider() -> GoogleProvider:
@@ -69,6 +94,20 @@ def _groq_model() -> GroqModel:
     return GroqModel(settings.groq_model, provider=provider)
 
 
+logger = logging.getLogger(__name__)
+
+# Lite models have separate quota - use when main model hits 429
+_GEMINI_API_LITE_FALLBACK = "gemini-2.0-flash-lite"
+
+
+def _google_gla_model_for(model_name: str) -> GoogleModel:
+    """Gemini via API key with specific model (for fallbacks)."""
+    if not settings.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY required")
+    provider = GoogleProvider(api_key=settings.gemini_api_key)
+    return GoogleModel(model_name, provider=provider)
+
+
 async def run_gemini_structured[T](
     *,
     user_prompt: str,
@@ -79,14 +118,27 @@ async def run_gemini_structured[T](
     """
     Run Gemini (Vertex AI) and force structured output validated against `output_type`.
     """
-    # Reuse the existing rate limiter used by the rest of the Gemini pipeline.
     await get_rate_limiter().acquire()
 
-    # Prefer Vertex AI (ADC/service account) when configured, else fall back to API key.
-    try:
-        model = _google_vertex_model()
-    except Exception:
+    if settings.gemini_api_key:
         model = _google_gla_model()
+    else:
+        model = _google_vertex_model()
+
+    def _run(agent_instance: Agent) -> T:
+        import asyncio
+
+        result = None
+        loop = asyncio.get_event_loop()
+        if hasattr(loop, "run_until_complete"):
+            result = loop.run_until_complete(agent_instance.run(user_prompt))
+        else:
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(lambda: asyncio.run(agent_instance.run(user_prompt)))
+                result = future.result()
+        return result.output
 
     agent = Agent(
         model,
@@ -98,11 +150,20 @@ async def run_gemini_structured[T](
         result = await agent.run(user_prompt)
         return result.output
     except ModelHTTPError as exc:
-        # If experimental model quota is exhausted, retry once with a stable model.
-        model_name = getattr(exc, "model_name", "") or ""
-        if exc.status_code == 429 and "exp" in model_name:
-            fallback_model = "gemini-2.5-flash"
-            fallback = GoogleModel(fallback_model, provider=_google_provider())
+        if exc.status_code != 429:
+            raise
+        # Quota exceeded: retry after delay, then try lite model (separate quota)
+        logger.warning("Gemini 429 quota exceeded, retrying after 12s then fallback to lite model")
+        await asyncio.sleep(12)
+        try:
+            result = await agent.run(user_prompt)
+            return result.output
+        except ModelHTTPError:
+            pass
+        # Fallback to lite model (has separate quota)
+        if settings.gemini_api_key:
+            logger.info(f"Using fallback model: {_GEMINI_API_LITE_FALLBACK}")
+            fallback = _google_gla_model_for(_GEMINI_API_LITE_FALLBACK)
             fallback_agent = Agent(
                 fallback,
                 system_prompt=system_prompt,

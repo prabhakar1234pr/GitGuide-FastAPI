@@ -18,6 +18,11 @@ from app.core.supabase_client import execute_with_retry, get_supabase_client
 from app.services.roadmap_client import call_roadmap_service_incremental_sync
 from app.services.task_validation import validate_task_completion
 from app.utils.clerk_auth import verify_clerk_token
+from app.utils.db_helpers import (
+    get_project_if_accessible,
+    get_user_id_from_clerk,
+    user_has_project_access,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,26 +48,9 @@ async def get_progress(
     Get user's progress across all days, concepts, and tasks.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("project_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Get all day progress
@@ -144,26 +132,9 @@ async def update_current_concept(
     Stores user_current_concept_id in the projects table.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("project_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Verify concept exists and belongs to project
@@ -225,29 +196,10 @@ async def get_current_concept_position(
     along with concept details and position in the curriculum.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        project, _ = get_project_if_accessible(
+            supabase, project_id, user_id, "project_id, user_current_concept_id"
         )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Get project with current concept
-        project_response = (
-            supabase.table("projects")
-            .select("project_id, user_current_concept_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        project = project_response.data[0]
         current_concept_id = project.get("user_current_concept_id")
 
         if not current_concept_id:
@@ -332,16 +284,10 @@ async def get_current_progress(
     Derive current day + concept from progress data.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
 
         # Get all days for project
         days_response = (
@@ -438,16 +384,10 @@ async def start_concept(
     Move concept to "doing" status and record start time.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
 
         # Verify concept exists and belongs to project
         concept_response = (
@@ -503,19 +443,18 @@ async def complete_concept(
     supabase: Client = Depends(get_supabase_client),
 ):
     """
-    Move concept to "done" status and record completion time.
+    Move concept to "done" status and record completion time. Employees only.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="Managers cannot mark concepts complete. Only employees can mark progress.",
+            )
 
         now = datetime.now(UTC).isoformat()
 
@@ -569,19 +508,18 @@ async def mark_content_read(
     supabase: Client = Depends(get_supabase_client),
 ):
     """
-    Mark concept content as read by the user.
+    Mark concept content as read by the user. Employees only (managers cannot mark complete).
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="Managers can view content but cannot mark it as complete. Only employees can mark progress.",
+            )
 
         # Verify concept exists and belongs to project
         concept_response = (
@@ -658,16 +596,21 @@ async def start_day(
     Start a day (move to "doing") and record start time.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
 
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
+        # Verify day belongs to project
+        day_check = (
+            supabase.table("roadmap_days")
+            .select("day_id")
+            .eq("day_id", day_id)
+            .eq("project_id", project_id)
+            .execute()
         )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        if not day_check.data:
+            raise HTTPException(status_code=404, detail="Day not found")
 
         now = datetime.now(UTC).isoformat()
 
@@ -700,19 +643,18 @@ async def complete_day(
     supabase: Client = Depends(get_supabase_client),
 ):
     """
-    Complete a day and unlock next day.
+    Complete a day and unlock next day. Employees only.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="Managers cannot mark days complete. Only employees can mark progress.",
+            )
 
         now = datetime.now(UTC).isoformat()
 
@@ -780,20 +722,19 @@ async def complete_task(
     supabase: Client = Depends(get_supabase_client),
 ):
     """
-    Mark task as completed and record completion time.
+    Mark task as completed and record completion time. Employees only.
     Optionally stores project-specific data (repo_url, commit_sha) for Day 0 tasks.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="Managers cannot mark tasks complete. Only employees can complete tasks.",
+            )
 
         # Verify task exists and belongs to project
         task_response = (
@@ -839,17 +780,9 @@ async def complete_task(
                     detail="Commit SHA is required to complete this task.",
                 )
 
-            project_response = (
-                supabase.table("projects")
-                .select("project_id, user_id, user_repo_url")
-                .eq("project_id", project_id)
-                .eq("user_id", user_id)
-                .execute()
+            project_data, _ = get_project_if_accessible(
+                supabase, project_id, user_id, "project_id, user_id, user_repo_url"
             )
-            if not project_response.data:
-                raise HTTPException(status_code=404, detail="Project not found")
-
-            project_data = project_response.data[0]
 
             is_valid, error_message = await validate_task_completion(
                 task_type,
@@ -941,16 +874,34 @@ async def start_task(
     Start a task and record start time.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
+        # Resolve task -> concept -> day -> project_id and verify access
+        task_resp = (
+            supabase.table("tasks").select("task_id, concept_id").eq("task_id", task_id).execute()
         )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        if not task_resp.data:
+            raise HTTPException(status_code=404, detail="Task not found")
+        concept_resp = (
+            supabase.table("concepts")
+            .select("concept_id, day_id")
+            .eq("concept_id", task_resp.data[0]["concept_id"])
+            .execute()
+        )
+        if not concept_resp.data:
+            raise HTTPException(status_code=404, detail="Concept not found")
+        day_resp = (
+            supabase.table("roadmap_days")
+            .select("day_id, project_id")
+            .eq("day_id", concept_resp.data[0]["day_id"])
+            .execute()
+        )
+        if not day_resp.data:
+            raise HTTPException(status_code=404, detail="Day not found")
+        proj_id = day_resp.data[0]["project_id"]
+        has_access, _ = user_has_project_access(supabase, str(proj_id), user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
 
         now = datetime.now(UTC).isoformat()
 

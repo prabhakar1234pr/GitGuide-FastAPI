@@ -15,6 +15,14 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _is_local_roadmap_url(url: str) -> bool:
+    """True if roadmap URL points to localhost/127.0.0.1 (no GCP metadata available)."""
+    if not url:
+        return False
+    u = url.lower()
+    return "localhost" in u or "127.0.0.1" in u
+
+
 def _get_identity_token_sync(target_url: str) -> str:
     """
     Get a Google Cloud Identity token for service-to-service authentication.
@@ -98,13 +106,14 @@ async def call_roadmap_service_incremental(project_id: str) -> dict:
         "X-Internal-Token": settings.internal_auth_token,
     }
 
-    # Get Google Cloud Identity Token for Cloud Run IAM authentication
-    try:
-        identity_token = await _get_identity_token(settings.roadmap_service_url)
-        headers["Authorization"] = f"Bearer {identity_token}"
-        logger.info(f"🔐 Using Google Cloud Identity Token (length: {len(identity_token)})")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not get identity token (local dev?): {e}")
+    # Get Google Cloud Identity Token only when on GCP (metadata server not available locally)
+    if not _is_local_roadmap_url(settings.roadmap_service_url or ""):
+        try:
+            identity_token = await _get_identity_token(settings.roadmap_service_url)
+            headers["Authorization"] = f"Bearer {identity_token}"
+            logger.info(f"🔐 Using Google Cloud Identity Token (length: {len(identity_token)})")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get identity token: {e}")
 
     logger.info(f"🔐 Using X-Internal-Token (length: {len(settings.internal_auth_token)})")
     logger.info(f"🔐 Token (first 20 chars): {settings.internal_auth_token[:20]}...")
@@ -227,13 +236,14 @@ async def call_roadmap_service_generate(
         "X-Internal-Token": settings.internal_auth_token,
     }
 
-    # Get Google Cloud Identity Token for Cloud Run IAM authentication
-    try:
-        identity_token = await _get_identity_token(settings.roadmap_service_url)
-        headers["Authorization"] = f"Bearer {identity_token}"
-        logger.info(f"🔐 Using Google Cloud Identity Token (length: {len(identity_token)})")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not get identity token (local dev?): {e}")
+    # Get Google Cloud Identity Token only when on GCP (metadata server not available locally)
+    if not _is_local_roadmap_url(settings.roadmap_service_url or ""):
+        try:
+            identity_token = await _get_identity_token(settings.roadmap_service_url)
+            headers["Authorization"] = f"Bearer {identity_token}"
+            logger.info(f"🔐 Using Google Cloud Identity Token (length: {len(identity_token)})")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get identity token: {e}")
 
     logger.info(f"🔐 Using X-Internal-Token (length: {len(settings.internal_auth_token)})")
     logger.info(f"🔐 Token (first 20 chars): {settings.internal_auth_token[:20]}...")

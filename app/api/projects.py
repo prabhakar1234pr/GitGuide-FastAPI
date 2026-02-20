@@ -13,6 +13,7 @@ from app.services.qdrant_service import get_qdrant_service
 from app.services.terminal_service import get_terminal_service
 from app.services.workspace_manager import get_workspace_manager
 from app.utils.clerk_auth import verify_clerk_token
+from app.utils.db_helpers import get_project_if_accessible, get_user_id_from_clerk
 from app.utils.github_utils import extract_project_name, validate_github_url
 from app.utils.markdown_sanitizer import sanitize_markdown_content
 
@@ -64,9 +65,9 @@ async def create_project(
         )
         logger.info(f"Creating project for user: {clerk_user_id}")
 
-        # Get Supabase user_id from User table
+        # Get Supabase user_id and role from User table
         user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
+            supabase.table("User").select("id, role").eq("clerk_user_id", clerk_user_id).execute()
         )
 
         if not user_response.data or len(user_response.data) == 0:
@@ -76,6 +77,13 @@ async def create_project(
             )
 
         user_id = user_response.data[0]["id"]
+        user_role = user_response.data[0].get("role") or "employee"
+
+        if user_role != "manager":
+            raise HTTPException(
+                status_code=403,
+                detail="Only managers can create projects. Sign up as a manager to create guides.",
+            )
 
         # Extract project name from GitHub URL
         try:
@@ -540,40 +548,174 @@ async def list_user_projects(
     user_info: dict = Depends(verify_clerk_token), supabase: Client = Depends(get_supabase_client)
 ):
     """
-    List all projects for the authenticated user
+    List all projects for the authenticated user (owned + granted access).
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-
-        if not user_response.data or len(user_response.data) == 0:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Get all projects for user
-        projects_response = (
+        # Owned projects
+        owned_response = (
             supabase.table("projects")
             .select("*")
             .eq("user_id", user_id)
             .order("created_at", desc=True)
             .execute()
         )
+        owned = owned_response.data or []
 
-        return {
-            "success": True,
-            "projects": projects_response.data if projects_response.data else [],
-        }
+        # Granted projects (via project_access)
+        access_response = (
+            supabase.table("project_access").select("project_id").eq("user_id", user_id).execute()
+        )
+        granted_ids = [r["project_id"] for r in (access_response.data or [])]
+        granted = []
+        if granted_ids:
+            granted_response = (
+                supabase.table("projects").select("*").in_("project_id", granted_ids).execute()
+            )
+            granted = granted_response.data or []
+
+        # Merge and dedupe by project_id, add is_owner flag, sort by created_at desc
+        seen = {p["project_id"]: {**p, "is_owner": True} for p in owned}
+        for p in granted:
+            if p["project_id"] not in seen:
+                seen[p["project_id"]] = {**p, "is_owner": False}
+        projects = list(seen.values())
+        projects.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+        return {"success": True, "projects": projects}
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error listing projects: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}") from e
+
+
+class GrantAccessRequest(BaseModel):
+    email: str = Field(..., description="Employee email to grant access")
+
+
+@router.post("/{project_id}/access")
+async def grant_project_access(
+    project_id: str,
+    body: GrantAccessRequest,
+    user_info: dict = Depends(verify_clerk_token),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Grant project access to an employee by email. Manager (project owner) only.
+    """
+    try:
+        manager_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+
+        project, is_owner = get_project_if_accessible(supabase, project_id, manager_id)
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Only the project owner can grant access")
+
+        # Resolve email -> User.id
+        user_response = (
+            supabase.table("User").select("id").eq("email", body.email.strip()).execute()
+        )
+        if not user_response.data or len(user_response.data) == 0:
+            raise HTTPException(status_code=404, detail=f"No user found with email: {body.email}")
+
+        employee_id = user_response.data[0]["id"]
+        if employee_id == manager_id:
+            raise HTTPException(status_code=400, detail="You already own this project")
+
+        # Insert into project_access (ignore if already exists - unique constraint)
+        try:
+            supabase.table("project_access").insert(
+                {
+                    "project_id": project_id,
+                    "user_id": employee_id,
+                    "granted_by": manager_id,
+                }
+            ).execute()
+        except Exception as e:
+            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+                return {
+                    "success": True,
+                    "message": "Access already granted",
+                    "action": "already_exists",
+                }
+            raise
+
+        return {"success": True, "message": "Access granted", "action": "granted"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error granting access: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to grant access: {str(e)}") from e
+
+
+@router.get("/{project_id}/access")
+async def list_project_access(
+    project_id: str,
+    user_info: dict = Depends(verify_clerk_token),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    List emails with access to the project. Manager (project owner) only.
+    """
+    try:
+        manager_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        _, is_owner = get_project_if_accessible(supabase, project_id, manager_id)
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Only the project owner can view access")
+
+        access_response = (
+            supabase.table("project_access")
+            .select("user_id")
+            .eq("project_id", project_id)
+            .execute()
+        )
+        if not access_response.data:
+            return {"success": True, "access_list": []}
+
+        user_ids = [r["user_id"] for r in access_response.data]
+        users_response = supabase.table("User").select("id, email").in_("id", user_ids).execute()
+        email_map = {u["id"]: u.get("email") or "—" for u in (users_response.data or [])}
+        access_list = [{"user_id": uid, "email": email_map.get(uid, "—")} for uid in user_ids]
+
+        return {"success": True, "access_list": access_list}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing access: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list access: {str(e)}") from e
+
+
+@router.delete("/{project_id}/access/{access_user_id}")
+async def revoke_project_access(
+    project_id: str,
+    access_user_id: str,
+    user_info: dict = Depends(verify_clerk_token),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Revoke project access from an employee. Manager (project owner) only.
+    """
+    try:
+        manager_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        _, is_owner = get_project_if_accessible(supabase, project_id, manager_id)
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Only the project owner can revoke access")
+
+        supabase.table("project_access").delete().eq("project_id", project_id).eq(
+            "user_id", access_user_id
+        ).execute()
+
+        return {"success": True, "message": "Access revoked"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error revoking access: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to revoke access: {str(e)}") from e
 
 
 @router.get("/{project_id}")
@@ -583,34 +725,12 @@ async def get_project(
     supabase: Client = Depends(get_supabase_client),
 ):
     """
-    Get project details by project_id
+    Get project details by project_id. Allowed if owner or has granted access.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-
-        if not user_response.data or len(user_response.data) == 0:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Get project (ensure it belongs to the user)
-        project_response = (
-            supabase.table("projects")
-            .select("*")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-
-        if not project_response.data or len(project_response.data) == 0:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        return {"success": True, "project": project_response.data[0]}
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        project, is_owner = get_project_if_accessible(supabase, project_id, user_id)
+        return {"success": True, "project": {**project, "is_owner": is_owner}}
 
     except HTTPException:
         raise

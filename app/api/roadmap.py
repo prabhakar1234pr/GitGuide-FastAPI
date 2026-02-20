@@ -10,6 +10,11 @@ from supabase import Client
 
 from app.core.supabase_client import get_supabase_client
 from app.utils.clerk_auth import verify_clerk_token
+from app.utils.db_helpers import (
+    get_project_if_accessible,
+    get_user_id_from_clerk,
+    user_has_project_access,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,26 +30,10 @@ async def get_roadmap(
     Get all days for a project with their status and estimated times.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("project_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Get all days with all fields including estimated_minutes
@@ -76,26 +65,9 @@ async def get_day_details(
     Get day details with all concepts (including content and estimated_minutes).
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("project_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Get day
@@ -156,26 +128,9 @@ async def get_concept_details(
     Tasks include difficulty, hints, and estimated time.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("project_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Get concept (includes content and estimated_minutes)
@@ -255,29 +210,13 @@ async def get_generation_status(
     Get overall roadmap generation status with progress percentage.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        project, _ = get_project_if_accessible(
+            supabase,
+            project_id,
+            user_id,
+            "project_id, target_days, generation_progress, error_message",
         )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user and get generation_progress
-        project_response = (
-            supabase.table("projects")
-            .select("project_id, target_days, generation_progress, error_message")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        project = project_response.data[0]
         target_days = project["target_days"]
         generation_progress = project.get("generation_progress", 0)
         error_message = project.get("error_message")
@@ -339,26 +278,9 @@ async def debug_concept_details(
     Returns raw database data without any processing.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
-
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("project_id")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        has_access, _ = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Get concept with ALL fields explicitly listed
@@ -427,16 +349,7 @@ async def get_task_details(
     Includes task difficulty, hints, solution, and estimated time.
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
-
-        # Get user_id
-        user_response = (
-            supabase.table("User").select("id").eq("clerk_user_id", clerk_user_id).execute()
-        )
-        if not user_response.data:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        user_id = user_response.data[0]["id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
         # Get task (includes all new fields)
         task_response = supabase.table("tasks").select("*").eq("task_id", task_id).execute()
@@ -464,20 +377,20 @@ async def get_task_details(
         day = day_response.data[0]
         project_id = day["project_id"]
 
-        # Verify project belongs to user
-        project_response = (
-            supabase.table("projects")
-            .select("*")
-            .eq("project_id", project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
+        has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        project = project_response.data[0]
+        project, _ = get_project_if_accessible(supabase, project_id, user_id)
+        project_with_owner = {**project, "is_owner": is_owner}
 
-        return {"success": True, "task": task, "concept": concept, "day": day, "project": project}
+        return {
+            "success": True,
+            "task": task,
+            "concept": concept,
+            "day": day,
+            "project": project_with_owner,
+        }
 
     except HTTPException:
         raise

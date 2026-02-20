@@ -18,6 +18,7 @@ from app.services.github_service import extract_repo_info
 from app.services.verification_agent import VerificationAgent
 from app.services.workspace_manager import WorkspaceManager
 from app.utils.clerk_auth import verify_clerk_token
+from app.utils.db_helpers import user_has_project_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -147,17 +148,23 @@ async def verify_task(
         day_theme = day.get("theme")
         day_description = day.get("description")
 
+        has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Not authorized to verify this task")
+        if is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="Managers cannot verify tasks. Only employees can verify and complete tasks in the IDE.",
+            )
+
         project_response = (
             supabase.table("projects")
             .select("project_id, user_repo_url, github_url")
             .eq("project_id", project_id)
-            .eq("user_id", user_id)
             .execute()
         )
-
         if not project_response.data:
-            raise HTTPException(status_code=403, detail="Not authorized to verify this task")
-
+            raise HTTPException(status_code=404, detail="Project not found")
         project = project_response.data[0]
         # Use user_repo_url (notebook repo) - agent should never see user's PAT
         repo_url = project.get("user_repo_url")

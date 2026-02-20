@@ -68,6 +68,79 @@ def verify_project_ownership(
     return project_response.data[0]
 
 
+def user_has_project_access(supabase: Client, project_id: str, user_id: str) -> tuple[bool, bool]:
+    """
+    Check if user has access to project (as owner or via project_access).
+
+    Returns:
+        (has_access, is_owner)
+    """
+    # Check owner
+    project_response = (
+        supabase.table("projects")
+        .select("project_id")
+        .eq("project_id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if project_response.data and len(project_response.data) > 0:
+        return True, True
+
+    # Check project_access
+    access_response = (
+        supabase.table("project_access")
+        .select("id")
+        .eq("project_id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if access_response.data and len(access_response.data) > 0:
+        return True, False
+
+    return False, False
+
+
+def get_project_if_accessible(
+    supabase: Client, project_id: str, user_id: str, select_fields: str = "*"
+) -> tuple[dict[str, Any], bool]:
+    """
+    Get project if user has access (owner or granted). Returns (project_data, is_owner).
+
+    Raises:
+        HTTPException: If project not found or user has no access.
+    """
+    # Try owner first
+    project_response = (
+        supabase.table("projects")
+        .select(select_fields)
+        .eq("project_id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if project_response.data and len(project_response.data) > 0:
+        return project_response.data[0], True
+
+    # Check project_access
+    access_response = (
+        supabase.table("project_access")
+        .select("id")
+        .eq("project_id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not access_response.data or len(access_response.data) == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # User has access via grant - fetch project (any owner)
+    project_response = (
+        supabase.table("projects").select(select_fields).eq("project_id", project_id).execute()
+    )
+    if not project_response.data or len(project_response.data) == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return project_response.data[0], False
+
+
 def verify_project_and_get_user_id(
     supabase: Client, clerk_user_id: str, project_id: str, select_fields: str | None = None
 ) -> tuple[str, dict[str, Any]]:

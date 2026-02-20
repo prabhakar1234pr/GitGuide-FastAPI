@@ -62,4 +62,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Keep container running - production-ready approach
 CMD ["tail", "-f", "/dev/null"]
-
