@@ -14,7 +14,7 @@ from app.core.supabase_client import get_supabase_client
 from app.services.groq_service import get_groq_service
 from app.services.task_chatbot_context import build_task_context
 from app.utils.clerk_auth import verify_clerk_token
-from app.utils.db_helpers import get_user_id_from_clerk
+from app.utils.db_helpers import get_user_id_from_clerk, user_has_project_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -67,6 +67,9 @@ class TaskChatRequest(BaseModel):
     verification: dict | None = Field(
         None, description="Verification feedback if user has verified the task"
     )
+    is_manager: bool | None = Field(
+        None, description="True if user is project owner (manager). Backend verifies."
+    )
 
     @field_validator("user_code")
     @classmethod
@@ -101,8 +104,8 @@ class ConversationListItem(BaseModel):
     updated_at: str | None = None
 
 
-async def verify_task_access(supabase: Client, task_id: str, user_id: str) -> dict:
-    """Verify task exists and user has access to it."""
+async def verify_task_access(supabase: Client, task_id: str, user_id: str) -> tuple[dict, bool]:
+    """Verify task exists and user has access to it. Returns (task, is_owner)."""
     # Get task
     task_response = supabase.table("tasks").select("*").eq("task_id", task_id).execute()
 
@@ -137,21 +140,14 @@ async def verify_task_access(supabase: Client, task_id: str, user_id: str) -> di
 
     project_id = day_response.data[0].get("project_id")
 
-    # Verify project belongs to user
-    project_response = (
-        supabase.table("projects")
-        .select("project_id")
-        .eq("project_id", project_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-
-    if not project_response.data:
+    # Verify user has access (owner or project_access)
+    has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+    if not has_access:
         raise HTTPException(status_code=403, detail="You don't have permission to access this task")
 
     # Add project_id to task for convenience
     task["project_id"] = project_id
-    return task
+    return task, is_owner
 
 
 async def create_new_conversation(
@@ -250,9 +246,10 @@ async def chat_task(
         # 1. Get user_id
         user_id = get_user_id_from_clerk(supabase, clerk_user_id)
 
-        # 2. Verify task exists and belongs to user's project
-        task = await verify_task_access(supabase, task_id, user_id)
+        # 2. Verify task exists and user has access (owner or project_access)
+        task, is_owner = await verify_task_access(supabase, task_id, user_id)
         project_id = task["project_id"]
+        is_manager = request.is_manager if request.is_manager is not None else is_owner
 
         # 3. Get or create conversation
         conversation_id = request.conversation_id
@@ -277,7 +274,7 @@ async def chat_task(
         conversation_history = await load_conversation_history(supabase, conversation_id, limit=20)
         logger.info(f"   Loaded {len(conversation_history)} previous messages")
 
-        # 5. Build rich context
+        # 5. Build rich context (include user role)
         user_code_list = [{"path": f.path, "content": f.content} for f in request.user_code]
         context = await build_task_context(
             task_id=task_id,
@@ -285,15 +282,29 @@ async def chat_task(
             user_code=user_code_list,
             supabase=supabase,
             verification=request.verification,
+            is_manager=is_manager,
         )
 
-        # 6. Generate response with teaching-focused prompt
+        # 6. Generate response with role-aware prompt
+        role_instruction = (
+            "IMPORTANT: The user is a MANAGER (project owner) reviewing this task. "
+            "They cannot perform or verify tasks—view only. Focus on explaining concepts, "
+            "overview, and what employees would need to do. Do not suggest they implement or verify."
+            if is_manager
+            else ""
+        )
+        system_prompt = TEACHING_SYSTEM_PROMPT + (
+            f"\n\n{role_instruction}" if role_instruction else ""
+        )
+
         groq_service = get_groq_service()
-        logger.info(f"   Generating response with Groq (message length: {len(request.message)})")
+        logger.info(
+            f"   Generating response with Groq (message length: {len(request.message)}, is_manager={is_manager})"
+        )
 
         response = await groq_service.generate_response_async(
             user_query=request.message,
-            system_prompt=TEACHING_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             context=context,
             conversation_history=conversation_history,
             temperature=0.7,
@@ -341,7 +352,7 @@ async def get_task_conversation(
         user_id = get_user_id_from_clerk(supabase, clerk_user_id)
 
         # Verify task access
-        task = await verify_task_access(supabase, task_id, user_id)
+        task, _ = await verify_task_access(supabase, task_id, user_id)
         project_id = task["project_id"]
         logger.info(f"   Task verified, project_id={project_id}")
 
@@ -438,7 +449,7 @@ async def list_task_conversations(
     clerk_user_id = user_info["clerk_user_id"]
     user_id = get_user_id_from_clerk(supabase, clerk_user_id)
 
-    task = await verify_task_access(supabase, task_id, user_id)
+    task, _ = await verify_task_access(supabase, task_id, user_id)
     project_id = task["project_id"]
 
     convs = (

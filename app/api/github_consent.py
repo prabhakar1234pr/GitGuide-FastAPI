@@ -13,7 +13,7 @@ from supabase import Client
 
 from app.core.supabase_client import get_supabase_client
 from app.utils.clerk_auth import verify_clerk_token
-from app.utils.db_helpers import verify_project_and_get_user_id
+from app.utils.db_helpers import get_project_if_accessible, get_user_id_from_clerk
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -203,15 +203,28 @@ async def store_github_consent(
     6. Store token, username, consent, and timestamp in projects table
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
-        # Verify project ownership and get project data
-        user_id, project_data = verify_project_and_get_user_id(
+        # Verify access (owner or employee) and get project/employee data
+        project_data, is_owner = get_project_if_accessible(
             supabase,
-            clerk_user_id,
             request.project_id,
-            select_fields="project_id, github_username, user_repo_url, user_repo_first_commit",
+            user_id,
+            select_fields="project_id, github_username, user_repo_url, user_repo_first_commit, github_access_token, github_consent_accepted",
         )
+        if not is_owner:
+            pa = (
+                supabase.table("project_access")
+                .select("github_username, user_repo_url, user_repo_first_commit")
+                .eq("project_id", request.project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if pa.data:
+                project_data = {
+                    **project_data,
+                    **{k: v for k, v in pa.data[0].items() if v is not None},
+                }
 
         logger.info(f"Storing GitHub consent for project {request.project_id}, user {user_id}")
 
@@ -292,28 +305,31 @@ async def store_github_consent(
         if not request.consent_accepted:
             raise HTTPException(status_code=400, detail="Consent must be accepted to continue")
 
-        # Store in projects table
-        # Note: In production, encrypt the token before storing
-        # For MVP, storing as-is (Supabase encryption at rest handles this)
-        # Username is already stored from Task 1, so we don't overwrite it
         update_data = {
-            "github_access_token": request.token,  # TODO: Encrypt before storing
+            "github_access_token": request.token,
             "github_consent_accepted": True,
             "github_consent_timestamp": datetime.now(UTC).isoformat(),
         }
 
-        result = (
-            supabase.table("projects")
-            .update(update_data)
-            .eq("project_id", request.project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
+        if is_owner:
+            result = (
+                supabase.table("projects")
+                .update(update_data)
+                .eq("project_id", request.project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        else:
+            result = (
+                supabase.table("project_access")
+                .update(update_data)
+                .eq("project_id", request.project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
 
         if not result.data:
-            raise HTTPException(
-                status_code=500, detail="Failed to update project with GitHub consent"
-            )
+            raise HTTPException(status_code=500, detail="Failed to update with GitHub consent")
 
         logger.info(
             f"✅ GitHub consent stored for project {request.project_id}, "
@@ -378,15 +394,29 @@ async def get_consent_status(
         }
     """
     try:
-        clerk_user_id = user_info["clerk_user_id"]
+        user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
-        # Verify project ownership
-        user_id, project_data = verify_project_and_get_user_id(
+        project_data, is_owner = get_project_if_accessible(
             supabase,
-            clerk_user_id,
             project_id,
+            user_id,
             select_fields="github_access_token, github_username, github_consent_accepted, github_consent_timestamp",
         )
+        if not is_owner:
+            pa = (
+                supabase.table("project_access")
+                .select(
+                    "github_access_token, github_username, github_consent_accepted, github_consent_timestamp"
+                )
+                .eq("project_id", project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if pa.data:
+                project_data = {
+                    **project_data,
+                    **{k: v for k, v in pa.data[0].items() if v is not None},
+                }
 
         return {
             "has_consent": project_data.get("github_consent_accepted", False),

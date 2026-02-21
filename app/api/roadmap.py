@@ -382,14 +382,29 @@ async def get_task_details(
             raise HTTPException(status_code=404, detail="Project not found")
 
         project, _ = get_project_if_accessible(supabase, project_id, user_id)
-        project_with_owner = {**project, "is_owner": is_owner}
+
+        if not is_owner:
+            pa = (
+                supabase.table("project_access")
+                .select(
+                    "user_repo_url, github_username, user_repo_first_commit, github_consent_accepted, github_consent_timestamp"
+                )
+                .eq("project_id", project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if pa.data:
+                employee_fields = {k: v for k, v in pa.data[0].items() if v is not None}
+                project = {**project, **employee_fields}
+
+        project.pop("github_access_token", None)
 
         return {
             "success": True,
             "task": task,
             "concept": concept,
             "day": day,
-            "project": project_with_owner,
+            "project": {**project, "is_owner": is_owner},
         }
 
     except HTTPException:

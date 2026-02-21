@@ -19,6 +19,7 @@ async def build_task_context(
     user_code: list[dict[str, str]],
     supabase: Client,
     verification: dict[str, Any] | None = None,
+    is_manager: bool = False,
 ) -> str:
     """
     Build comprehensive context string for task chatbot.
@@ -128,6 +129,14 @@ async def build_task_context(
         # 6. Build context string
         context_parts = []
 
+        # User role section
+        context_parts.append("=== USER ROLE ===")
+        context_parts.append(
+            "Manager (project owner, view only—cannot perform or verify tasks)"
+            if is_manager
+            else "Employee (learning and implementing tasks)"
+        )
+
         # Concept section
         context_parts.append(f"=== CONCEPT: {concept.get('title', 'Unknown')} ===")
         if concept.get("description"):
@@ -215,7 +224,12 @@ async def build_task_context(
                 context_parts.append(f"\nCode Quality Assessment:\n{code_quality}")
         else:
             context_parts.append(
-                "No verification feedback yet. Try implementing the task and clicking 'Verify Changes'."
+                "No verification feedback yet. "
+                + (
+                    "Managers cannot verify—employees verify after implementing."
+                    if is_manager
+                    else "Try implementing the task and clicking 'Verify Changes'."
+                )
             )
 
         context = "\n".join(context_parts)

@@ -180,7 +180,8 @@ def trigger_roadmap_generation_sync(
     Synchronous wrapper to trigger roadmap generation.
 
     This is used by FastAPI BackgroundTasks which doesn't support async directly.
-    We create a new event loop here.
+    Uses asyncio.run() to create an isolated event loop - avoids "Event loop is closed"
+    when BackgroundTasks run after the HTTP response is sent.
 
     Args:
         project_id: UUID of the project
@@ -188,24 +189,17 @@ def trigger_roadmap_generation_sync(
         skill_level: beginner/intermediate/advanced
         target_days: Number of days for the roadmap
     """
-    # Create new event loop for this background task
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        loop.run_until_complete(
-            run_roadmap_generation(
-                project_id=project_id,
-                github_url=github_url,
-                skill_level=skill_level,
-                target_days=target_days,
-            )
+    asyncio.run(
+        run_roadmap_generation(
+            project_id=project_id,
+            github_url=github_url,
+            skill_level=skill_level,
+            target_days=target_days,
         )
-    finally:
-        loop.close()
+    )
 
 
-async def run_incremental_concept_generation(project_id: str):
+async def run_incremental_concept_generation(project_id: str, user_id_override: str | None = None):
     """
     Run incremental concept generation for lazy loading.
 
@@ -219,6 +213,7 @@ async def run_incremental_concept_generation(project_id: str):
 
     Args:
         project_id: UUID of the project
+        user_id_override: UUID of the user who completed (per-user cursor); uses project owner if None
     """
     logger.info("=" * 70)
     logger.info("🔄 STARTING INCREMENTAL CONCEPT GENERATION")
@@ -253,7 +248,7 @@ async def run_incremental_concept_generation(project_id: str):
         github_url = project["github_url"]
         skill_level = project["skill_level"]
         target_days = project["target_days"]
-        user_id = project.get("user_id")
+        user_id = user_id_override or project.get("user_id")
         curriculum_structure = project.get("curriculum_structure")
 
         logger.info("✅ Project data loaded:")
@@ -490,19 +485,15 @@ async def run_incremental_concept_generation(project_id: str):
         # Don't raise - this is a background task
 
 
-def trigger_incremental_generation_sync(project_id: str):
+def trigger_incremental_generation_sync(project_id: str, user_id: str | None = None):
     """
     Synchronous wrapper to trigger incremental concept generation.
 
     This is used by FastAPI BackgroundTasks.
+    Uses asyncio.run() for isolated event loop (avoids "Event loop is closed").
 
     Args:
         project_id: UUID of the project
+        user_id: UUID of the user who completed (per-user cursor; uses project owner if None)
     """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        loop.run_until_complete(run_incremental_concept_generation(project_id))
-    finally:
-        loop.close()
+    asyncio.run(run_incremental_concept_generation(project_id, user_id))

@@ -3,7 +3,7 @@ API routes for user progress tracking.
 Handles day, concept, and task progress with analytics timestamps.
 
 Includes support for:
-- Lazy loading: update user_current_concept_id for sliding window generation
+- Lazy loading: per-user cursor (user_project_cursor) for sliding window generation
 - Concept-level tracking: track individual concept completion
 """
 
@@ -26,6 +26,66 @@ from app.utils.db_helpers import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _get_user_current_concept_id(supabase: Client, project_id: str, user_id: str) -> str | None:
+    """
+    Get user's current concept position for lazy loading.
+    Uses user_project_cursor if set, else derives from user_concept_progress.
+    """
+    # Check user_project_cursor (manual or from completion)
+    cursor_response = (
+        supabase.table("user_project_cursor")
+        .select("current_concept_id")
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .execute()
+    )
+    if cursor_response.data and cursor_response.data[0].get("current_concept_id"):
+        return cursor_response.data[0]["current_concept_id"]
+
+    # Derive from user_concept_progress: doing first, else last completed
+    days_response = (
+        supabase.table("roadmap_days").select("day_id").eq("project_id", project_id).execute()
+    )
+    if not days_response.data:
+        return None
+    day_ids = [d["day_id"] for d in days_response.data]
+
+    concepts_response = (
+        supabase.table("concepts").select("concept_id").in_("day_id", day_ids).execute()
+    )
+    if not concepts_response.data:
+        return None
+    project_concept_ids = [c["concept_id"] for c in concepts_response.data]
+
+    # Check for 'doing'
+    doing_response = (
+        supabase.table("user_concept_progress")
+        .select("concept_id")
+        .eq("user_id", user_id)
+        .in_("concept_id", project_concept_ids)
+        .eq("progress_status", "doing")
+        .execute()
+    )
+    if doing_response.data:
+        return doing_response.data[0]["concept_id"]
+
+    # Last completed
+    done_response = (
+        supabase.table("user_concept_progress")
+        .select("concept_id")
+        .eq("user_id", user_id)
+        .in_("concept_id", project_concept_ids)
+        .eq("progress_status", "done")
+        .order("completed_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if done_response.data:
+        return done_response.data[0]["concept_id"]
+
+    return None
 
 
 class UpdateProgressRequest(BaseModel):
@@ -159,12 +219,17 @@ async def update_current_concept(
         if not day_response.data or day_response.data[0]["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="Concept not found in project")
 
-        # Update user_current_concept_id in projects table
-        supabase.table("projects").update(
+        # Upsert per-user cursor
+        now = datetime.now(UTC).isoformat()
+        supabase.table("user_project_cursor").upsert(
             {
-                "user_current_concept_id": request.concept_id,
-            }
-        ).eq("project_id", project_id).execute()
+                "user_id": user_id,
+                "project_id": project_id,
+                "current_concept_id": request.concept_id,
+                "updated_at": now,
+            },
+            on_conflict="user_id,project_id",
+        ).execute()
 
         logger.info(f"✅ Updated current concept for project {project_id}: {request.concept_id}")
 
@@ -192,15 +257,12 @@ async def get_current_concept_position(
     """
     Get the user's current concept position for lazy loading.
 
-    Returns the concept_id stored in projects.user_current_concept_id,
-    along with concept details and position in the curriculum.
+    Returns the concept_id from per-user cursor (user_project_cursor or user_concept_progress).
     """
     try:
         user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
-        project, _ = get_project_if_accessible(
-            supabase, project_id, user_id, "project_id, user_current_concept_id"
-        )
-        current_concept_id = project.get("user_current_concept_id")
+        get_project_if_accessible(supabase, project_id, user_id, "project_id")
+        current_concept_id = _get_user_current_concept_id(supabase, project_id, user_id)
 
         if not current_concept_id:
             return {
@@ -450,11 +512,45 @@ async def complete_concept(
         has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
         if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
-        if is_owner:
-            raise HTTPException(
-                status_code=403,
-                detail="Managers cannot mark concepts complete. Only employees can mark progress.",
+
+        # Employees must complete all tasks and read content before marking concept complete
+        if not is_owner:
+            tasks_response = (
+                supabase.table("tasks").select("task_id").eq("concept_id", concept_id).execute()
             )
+            task_ids = [t["task_id"] for t in (tasks_response.data or [])]
+
+            concept_progress_response = (
+                supabase.table("user_concept_progress")
+                .select("content_read")
+                .eq("user_id", user_id)
+                .eq("concept_id", concept_id)
+                .execute()
+            )
+            content_read = bool(
+                concept_progress_response.data
+                and concept_progress_response.data[0].get("content_read")
+            )
+
+            all_tasks_done = True
+            if task_ids:
+                task_progress_response = (
+                    supabase.table("user_task_progress")
+                    .select("task_id, progress_status")
+                    .eq("user_id", user_id)
+                    .in_("task_id", task_ids)
+                    .execute()
+                )
+                task_progress = {
+                    p["task_id"]: p["progress_status"] for p in (task_progress_response.data or [])
+                }
+                all_tasks_done = all(task_progress.get(tid) == "done" for tid in task_ids)
+
+            if not (content_read and all_tasks_done):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Complete all tasks and read the learning content to finish this concept.",
+                )
 
         now = datetime.now(UTC).isoformat()
 
@@ -470,14 +566,25 @@ async def complete_concept(
             on_conflict="user_id,concept_id",
         ).execute()
 
-        # Update user_current_concept_id to the completed concept for lazy loading
-        supabase.table("projects").update({"user_current_concept_id": concept_id}).eq(
-            "project_id", project_id
+        # Update per-user cursor for lazy loading
+        now_cursor = datetime.now(UTC).isoformat()
+        supabase.table("user_project_cursor").upsert(
+            {
+                "user_id": user_id,
+                "project_id": project_id,
+                "current_concept_id": concept_id,
+                "updated_at": now_cursor,
+            },
+            on_conflict="user_id,project_id",
         ).execute()
 
         # Trigger incremental concept generation via roadmap service (event-based)
-        logger.info(f"🔄 Triggering incremental generation after concept {concept_id} completion")
-        background_tasks.add_task(call_roadmap_service_incremental_sync, project_id)
+        # Skip for managers - lazy generation is driven by employee progress
+        if not is_owner:
+            logger.info(
+                f"🔄 Triggering incremental generation after concept {concept_id} completion"
+            )
+            background_tasks.add_task(call_roadmap_service_incremental_sync, project_id, user_id)
 
         # Check if all concepts for the day are done
         concept_response = (
@@ -730,11 +837,6 @@ async def complete_task(
         has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
         if not has_access:
             raise HTTPException(status_code=404, detail="Project not found")
-        if is_owner:
-            raise HTTPException(
-                status_code=403,
-                detail="Managers cannot mark tasks complete. Only employees can complete tasks.",
-            )
 
         # Verify task exists and belongs to project
         task_response = (
@@ -762,12 +864,20 @@ async def complete_task(
         concept = concept_response.data[0]
         day_response = (
             supabase.table("roadmap_days")
-            .select("project_id")
+            .select("project_id, day_number")
             .eq("day_id", concept["day_id"])
             .execute()
         )
         if not day_response.data or day_response.data[0]["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="Task not found in project")
+        day_number = day_response.data[0].get("day_number", -1)
+
+        # Managers can only complete Day 0 tasks (to store GitHub repo info for cloning)
+        if is_owner and day_number != 0:
+            raise HTTPException(
+                status_code=403,
+                detail="Managers cannot mark tasks complete. Only employees can complete tasks.",
+            )
 
         # For Day 0 Task 3 (verify_commit), validate that the provided commit
         # is actually the latest commit on the user's repository. This prevents
@@ -780,9 +890,19 @@ async def complete_task(
                     detail="Commit SHA is required to complete this task.",
                 )
 
-            project_data, _ = get_project_if_accessible(
+            project_data, is_owner = get_project_if_accessible(
                 supabase, project_id, user_id, "project_id, user_id, user_repo_url"
             )
+            if not is_owner:
+                pa = (
+                    supabase.table("project_access")
+                    .select("user_repo_url")
+                    .eq("project_id", project_id)
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+                if pa.data and pa.data[0].get("user_repo_url"):
+                    project_data = {**project_data, "user_repo_url": pa.data[0]["user_repo_url"]}
 
             is_valid, error_message = await validate_task_completion(
                 task_type,
@@ -825,29 +945,44 @@ async def complete_task(
                 }
             ).execute()
 
-        # Store project-specific data for Day 0 tasks
-        project_updates = {}
-        if request:
+        # Store project-specific data for Day 0 tasks (employees: project_access; managers: projects)
+        if request and day_number == 0:
             if task_type == "github_profile" and request.github_username:
-                project_updates["github_username"] = request.github_username
+                if is_owner:
+                    supabase.table("projects").update(
+                        {"github_username": request.github_username}
+                    ).eq("project_id", project_id).eq("user_id", user_id).execute()
+                else:
+                    supabase.table("project_access").update(
+                        {"github_username": request.github_username}
+                    ).eq("project_id", project_id).eq("user_id", user_id).execute()
                 logger.info(
-                    f"Storing github_username for project {project_id}: {request.github_username}"
+                    f"Storing github_username for {'manager' if is_owner else 'employee'} {user_id} project {project_id}: {request.github_username}"
                 )
             elif task_type == "create_repo" and request.user_repo_url:
-                project_updates["user_repo_url"] = request.user_repo_url
+                if is_owner:
+                    supabase.table("projects").update({"user_repo_url": request.user_repo_url}).eq(
+                        "project_id", project_id
+                    ).eq("user_id", user_id).execute()
+                else:
+                    supabase.table("project_access").update(
+                        {"user_repo_url": request.user_repo_url}
+                    ).eq("project_id", project_id).eq("user_id", user_id).execute()
                 logger.info(
-                    f"Storing user_repo_url for project {project_id}: {request.user_repo_url}"
+                    f"Storing user_repo_url for {'manager' if is_owner else 'employee'} {user_id} project {project_id}: {request.user_repo_url}"
                 )
             elif task_type == "verify_commit" and request.commit_sha:
-                project_updates["user_repo_first_commit"] = request.commit_sha
+                if is_owner:
+                    supabase.table("projects").update(
+                        {"user_repo_first_commit": request.commit_sha}
+                    ).eq("project_id", project_id).eq("user_id", user_id).execute()
+                else:
+                    supabase.table("project_access").update(
+                        {"user_repo_first_commit": request.commit_sha}
+                    ).eq("project_id", project_id).eq("user_id", user_id).execute()
                 logger.info(
-                    f"Storing user_repo_first_commit for project {project_id}: {request.commit_sha}"
+                    f"Storing user_repo_first_commit for {'manager' if is_owner else 'employee'} {user_id} project {project_id}: {request.commit_sha}"
                 )
-
-        if project_updates:
-            supabase.table("projects").update(project_updates).eq("project_id", project_id).eq(
-                "user_id", user_id
-            ).execute()
 
         # Check if all tasks for this concept are done, then auto-complete concept
         await _check_and_complete_concept_if_ready(
@@ -1015,9 +1150,16 @@ async def _check_and_complete_concept_if_ready(
                 on_conflict="user_id,concept_id",
             ).execute()
 
-            # Update user_current_concept_id to the completed concept for lazy loading
-            supabase.table("projects").update({"user_current_concept_id": concept_id}).eq(
-                "project_id", project_id
+            # Update per-user cursor for lazy loading
+            now_cursor = datetime.now(UTC).isoformat()
+            supabase.table("user_project_cursor").upsert(
+                {
+                    "user_id": user_id,
+                    "project_id": project_id,
+                    "current_concept_id": concept_id,
+                    "updated_at": now_cursor,
+                },
+                on_conflict="user_id,project_id",
             ).execute()
 
             # Trigger incremental concept generation via roadmap service (event-based)
@@ -1033,7 +1175,7 @@ async def _check_and_complete_concept_if_ready(
             async def trigger_incremental_safely():
                 """Wrapper to safely trigger incremental generation with error handling."""
                 try:
-                    await call_roadmap_service_incremental(project_id)
+                    await call_roadmap_service_incremental(project_id, user_id)
                     logger.info(
                         f"✅ Incremental generation triggered successfully for project {project_id}"
                     )

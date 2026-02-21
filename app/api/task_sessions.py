@@ -13,7 +13,7 @@ from app.core.supabase_client import get_supabase_client
 from app.services.task_session_service import TaskSessionService
 from app.services.workspace_manager import get_workspace_manager
 from app.utils.clerk_auth import verify_clerk_token
-from app.utils.db_helpers import get_user_id_from_clerk
+from app.utils.db_helpers import get_user_id_from_clerk, user_has_project_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -36,7 +36,6 @@ def start_task_session(
 ):
     user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
 
-    # Check if container is running, start it if not
     workspace_manager = get_workspace_manager()
     workspace = workspace_manager.get_workspace(request.workspace_id)
 
@@ -45,6 +44,11 @@ def start_task_session(
 
     if workspace.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Task sessions are for employees only - managers (project owners) cannot start them
+    _, is_owner = user_has_project_access(supabase, workspace.project_id, user_id)
+    if is_owner:
+        raise HTTPException(status_code=403, detail="Managers cannot start task sessions")
 
     if not workspace.container_id:
         raise HTTPException(status_code=400, detail="Workspace has no container")
@@ -56,14 +60,19 @@ def start_task_session(
         )
         success = workspace_manager.start_workspace(request.workspace_id)
         if not success:
+            # Refresh to get current status for error message
+            workspace = workspace_manager.get_workspace(request.workspace_id)
+            status = workspace.container_status if workspace else "unknown"
             raise HTTPException(
-                status_code=400,
-                detail=f"Failed to start workspace container (status: {workspace.container_status})",
+                status_code=503,
+                detail=f"Workspace container failed to start (status: {status}). Try refreshing or recreating the workspace.",
             )
-        # Refresh workspace to get updated status
         workspace = workspace_manager.get_workspace(request.workspace_id)
         if not workspace or workspace.container_status != "running":
-            raise HTTPException(status_code=500, detail="Container failed to start")
+            raise HTTPException(
+                status_code=503,
+                detail="Container failed to start. Try refreshing the page or recreating the workspace.",
+            )
 
     # Ensure the user's repo is cloned before starting the task session.
     # This prevents git operations from failing with "not a git repository".

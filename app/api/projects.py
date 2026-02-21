@@ -1,5 +1,7 @@
 import logging
+import secrets
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -7,9 +9,11 @@ from pydantic import BaseModel, Field, field_validator
 from supabase import Client
 
 from app.agents.day0 import get_day_0_content
+from app.config import settings
 from app.core.supabase_client import get_supabase_client
 from app.services.embedding_pipeline import run_embedding_pipeline
 from app.services.qdrant_service import get_qdrant_service
+from app.services.smtp_service import SMTPError, send_access_invite_email
 from app.services.terminal_service import get_terminal_service
 from app.services.workspace_manager import get_workspace_manager
 from app.utils.clerk_auth import verify_clerk_token
@@ -92,10 +96,12 @@ async def create_project(
             raise HTTPException(status_code=400, detail=str(e)) from e
 
         # Prepare project data
+        # Set user_repo_url = github_url so cloning works before Day 0 Task 2
         project_insert = {
             "user_id": user_id,
             "project_name": project_name,
             "github_url": project_data.github_url,
+            "user_repo_url": project_data.github_url,
             "skill_level": project_data.skill_level,
             "target_days": project_data.target_days,
             "status": "created",
@@ -596,6 +602,9 @@ class GrantAccessRequest(BaseModel):
     email: str = Field(..., description="Employee email to grant access")
 
 
+INVITE_EXPIRY_HOURS = 168  # 7 days
+
+
 @router.post("/{project_id}/access")
 async def grant_project_access(
     project_id: str,
@@ -605,6 +614,7 @@ async def grant_project_access(
 ):
     """
     Grant project access to an employee by email. Manager (project owner) only.
+    Sends access link via email. Existing users go to sign-in; new users go to get started.
     """
     try:
         manager_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
@@ -613,39 +623,80 @@ async def grant_project_access(
         if not is_owner:
             raise HTTPException(status_code=403, detail="Only the project owner can grant access")
 
-        # Resolve email -> User.id
-        user_response = (
-            supabase.table("User").select("id").eq("email", body.email.strip()).execute()
-        )
-        if not user_response.data or len(user_response.data) == 0:
-            raise HTTPException(status_code=404, detail=f"No user found with email: {body.email}")
+        email = body.email.strip().lower()
+        project_name = project.get("project_name", "Project")
 
-        employee_id = user_response.data[0]["id"]
-        if employee_id == manager_id:
+        # Check if inviting self (owner)
+        manager_res = supabase.table("User").select("email").eq("id", manager_id).execute()
+        manager_email = (manager_res.data[0].get("email") or "").lower() if manager_res.data else ""
+        if email == manager_email:
             raise HTTPException(status_code=400, detail="You already own this project")
 
-        # Insert into project_access (ignore if already exists - unique constraint)
-        try:
-            supabase.table("project_access").insert(
-                {
-                    "project_id": project_id,
-                    "user_id": employee_id,
-                    "granted_by": manager_id,
-                }
-            ).execute()
-        except Exception as e:
-            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-                return {
-                    "success": True,
-                    "message": "Access already granted",
-                    "action": "already_exists",
-                }
-            raise
+        # Resolve email -> User.id (optional)
+        user_response = supabase.table("User").select("id").eq("email", email).execute()
+        employee_id = user_response.data[0]["id"] if user_response.data else None
 
-        return {"success": True, "message": "Access granted", "action": "granted"}
+        # Create invite token for access link
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now(UTC) + timedelta(hours=INVITE_EXPIRY_HOURS)).isoformat()
+
+        # Upsert project_invites (one per project+email)
+        invite_data = {
+            "project_id": project_id,
+            "email": email,
+            "token": token,
+            "granted_by": manager_id,
+            "expires_at": expires_at,
+        }
+        existing = (
+            supabase.table("project_invites")
+            .select("id")
+            .eq("project_id", project_id)
+            .eq("email", email)
+            .execute()
+        )
+        if existing.data:
+            supabase.table("project_invites").update(invite_data).eq(
+                "id", existing.data[0]["id"]
+            ).execute()
+        else:
+            supabase.table("project_invites").insert(invite_data).execute()
+
+        # If user exists, add project_access now
+        if employee_id:
+            try:
+                supabase.table("project_access").insert(
+                    {
+                        "project_id": project_id,
+                        "user_id": employee_id,
+                        "granted_by": manager_id,
+                    }
+                ).execute()
+            except Exception as e:
+                if "unique" not in str(e).lower() and "duplicate" not in str(e).lower():
+                    raise
+                # Already granted - still send email
+
+        # Send access link via SMTP
+        base = settings.frontend_base_url.rstrip("/")
+        access_link = f"{base}/invite?token={token}"
+        if not send_access_invite_email(email, access_link, project_name):
+            return {
+                "success": True,
+                "message": "Access invite created (email not sent - SMTP not configured)",
+                "action": "invite_sent",
+            }
+
+        return {
+            "success": True,
+            "message": "Access invite sent",
+            "action": "invite_sent",
+        }
 
     except HTTPException:
         raise
+    except SMTPError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error granting access: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to grant access: {str(e)}") from e
@@ -689,6 +740,151 @@ async def list_project_access(
         raise HTTPException(status_code=500, detail=f"Failed to list access: {str(e)}") from e
 
 
+@router.get("/{project_id}/employees-progress")
+async def get_employees_progress(
+    project_id: str,
+    user_info: dict = Depends(verify_clerk_token),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Get progress of all employees who have access to this project.
+    Manager (project owner) only.
+    """
+    try:
+        manager_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
+        _, is_owner = get_project_if_accessible(supabase, project_id, manager_id)
+        if not is_owner:
+            raise HTTPException(
+                status_code=403, detail="Only the project owner can view employee progress"
+            )
+
+        access_response = (
+            supabase.table("project_access")
+            .select("user_id, github_username, user_repo_url, github_consent_accepted")
+            .eq("project_id", project_id)
+            .execute()
+        )
+        if not access_response.data:
+            return {"success": True, "employees": []}
+
+        user_ids = [r["user_id"] for r in access_response.data]
+        access_map = {r["user_id"]: r for r in access_response.data}
+
+        users_response = (
+            supabase.table("User").select("id, email, name").in_("id", user_ids).execute()
+        )
+        user_map = {u["id"]: u for u in (users_response.data or [])}
+
+        days_response = (
+            supabase.table("roadmap_days")
+            .select("day_id, day_number")
+            .eq("project_id", project_id)
+            .order("day_number", desc=False)
+            .execute()
+        )
+        days = days_response.data or []
+        day_ids = [d["day_id"] for d in days]
+        total_days = len(days)
+
+        concept_ids = []
+        task_ids = []
+        if day_ids:
+            concepts_response = (
+                supabase.table("concepts")
+                .select("concept_id, day_id")
+                .in_("day_id", day_ids)
+                .execute()
+            )
+            concept_ids = [c["concept_id"] for c in (concepts_response.data or [])]
+
+            if concept_ids:
+                tasks_response = (
+                    supabase.table("tasks")
+                    .select("task_id, concept_id")
+                    .in_("concept_id", concept_ids)
+                    .execute()
+                )
+                task_ids = [t["task_id"] for t in (tasks_response.data or [])]
+
+        total_concepts = len(concept_ids)
+        total_tasks = len(task_ids)
+
+        employees = []
+        for uid in user_ids:
+            user_info_row = user_map.get(uid, {})
+            pa = access_map.get(uid, {})
+
+            day_progress = (
+                (
+                    supabase.table("user_day_progress")
+                    .select("day_id, progress_status")
+                    .eq("user_id", uid)
+                    .in_("day_id", day_ids)
+                    .execute()
+                )
+                if day_ids
+                else type("R", (), {"data": []})()
+            )
+            days_done = sum(1 for d in (day_progress.data or []) if d["progress_status"] == "done")
+
+            concept_progress = (
+                (
+                    supabase.table("user_concept_progress")
+                    .select("concept_id, progress_status")
+                    .eq("user_id", uid)
+                    .in_("concept_id", concept_ids)
+                    .execute()
+                )
+                if concept_ids
+                else type("R", (), {"data": []})()
+            )
+            concepts_done = sum(
+                1 for c in (concept_progress.data or []) if c["progress_status"] == "done"
+            )
+
+            task_progress = (
+                (
+                    supabase.table("user_task_progress")
+                    .select("task_id, progress_status")
+                    .eq("user_id", uid)
+                    .in_("task_id", task_ids)
+                    .execute()
+                )
+                if task_ids
+                else type("R", (), {"data": []})()
+            )
+            tasks_done = sum(
+                1 for t in (task_progress.data or []) if t["progress_status"] == "done"
+            )
+
+            employees.append(
+                {
+                    "user_id": uid,
+                    "email": user_info_row.get("email") or "—",
+                    "name": user_info_row.get("name") or "",
+                    "github_username": pa.get("github_username"),
+                    "user_repo_url": pa.get("user_repo_url"),
+                    "github_connected": bool(pa.get("github_consent_accepted")),
+                    "days_completed": days_done,
+                    "total_days": total_days,
+                    "concepts_completed": concepts_done,
+                    "total_concepts": total_concepts,
+                    "tasks_completed": tasks_done,
+                    "total_tasks": total_tasks,
+                }
+            )
+
+        return {"success": True, "employees": employees}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching employees progress: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch employees progress: {str(e)}"
+        ) from e
+
+
 @router.delete("/{project_id}/access/{access_user_id}")
 async def revoke_project_access(
     project_id: str,
@@ -726,10 +922,28 @@ async def get_project(
 ):
     """
     Get project details by project_id. Allowed if owner or has granted access.
+    For employees, merges GitHub fields from project_access so the frontend
+    receives the employee's own repo URL, username, etc.
     """
     try:
         user_id = get_user_id_from_clerk(supabase, user_info["clerk_user_id"])
         project, is_owner = get_project_if_accessible(supabase, project_id, user_id)
+
+        if not is_owner:
+            pa = (
+                supabase.table("project_access")
+                .select(
+                    "user_repo_url, github_username, user_repo_first_commit, github_consent_accepted, github_consent_timestamp"
+                )
+                .eq("project_id", project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if pa.data:
+                employee_fields = {k: v for k, v in pa.data[0].items() if v is not None}
+                project = {**project, **employee_fields}
+
+        project.pop("github_access_token", None)
         return {"success": True, "project": {**project, "is_owner": is_owner}}
 
     except HTTPException:

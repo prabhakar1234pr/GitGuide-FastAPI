@@ -16,7 +16,7 @@ from app.services.external_commit_service import ExternalCommitService
 from app.services.git_service import GitService
 from app.services.workspace_manager import WorkspaceManager, get_workspace_manager
 from app.utils.clerk_auth import verify_clerk_token
-from app.utils.db_helpers import get_user_id_from_clerk
+from app.utils.db_helpers import get_user_id_from_clerk, user_has_project_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -161,30 +161,55 @@ def _maybe_auto_clone_repo(
 
 
 def _get_project_token(supabase: Client, project_id: str, user_id: str) -> str | None:
-    response = (
-        supabase.table("projects")
+    has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+    if not has_access:
+        return None
+    if is_owner:
+        r = (
+            supabase.table("projects")
+            .select("github_access_token")
+            .eq("project_id", project_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return r.data[0].get("github_access_token") if r.data else None
+    pa = (
+        supabase.table("project_access")
         .select("github_access_token")
         .eq("project_id", project_id)
         .eq("user_id", user_id)
         .execute()
     )
-    if not response.data:
-        return None
-    return response.data[0].get("github_access_token")
+    return pa.data[0].get("github_access_token") if pa.data else None
 
 
 def _get_project_repo_url(supabase: Client, project_id: str, user_id: str) -> str | None:
-    response = (
+    has_access, is_owner = user_has_project_access(supabase, project_id, user_id)
+    if not has_access:
+        return None
+    proj = (
         supabase.table("projects")
         .select("user_repo_url, github_url")
         .eq("project_id", project_id)
-        .eq("user_id", user_id)
         .execute()
     )
-    if not response.data:
+    if not proj.data:
         return None
-    project = response.data[0]
-    return project.get("user_repo_url") or project.get("github_url")
+    project = proj.data[0]
+    repo_url = project.get("user_repo_url") or project.get("github_url")
+    if not is_owner:
+        pa = (
+            supabase.table("project_access")
+            .select("user_repo_url")
+            .eq("project_id", project_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if pa.data and pa.data[0].get("user_repo_url"):
+            repo_url = pa.data[0]["user_repo_url"]
+        else:
+            repo_url = project.get("github_url")
+    return repo_url
 
 
 def _normalize_repo_url(url: str) -> str:

@@ -6,10 +6,12 @@ Tracks base commit per task session for accurate verification.
 import logging
 from datetime import UTC, datetime
 
+from fastapi import HTTPException
 from supabase import Client
 
 from app.core.supabase_client import get_supabase_client
 from app.services.git_service import GitService
+from app.utils.db_helpers import get_project_if_accessible
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +79,28 @@ class TaskSessionService:
                     return {"success": False, "error": "Workspace project not found"}
 
                 project_id = workspace_full.data[0].get("project_id")
-                project_response = (
-                    self.supabase.table("projects")
-                    .select("user_repo_url, github_access_token")
-                    .eq("project_id", project_id)
-                    .eq("user_id", user_id)
-                    .execute()
-                )
-                if not project_response.data:
-                    return {"success": False, "error": "Project not found"}
-
-                project = project_response.data[0]
-                repo_url = project.get("user_repo_url")
+                try:
+                    project, is_owner = get_project_if_accessible(
+                        self.supabase,
+                        project_id,
+                        user_id,
+                        select_fields="user_repo_url, github_url, github_access_token",
+                    )
+                except HTTPException as e:
+                    return {"success": False, "error": e.detail or "Project not found"}
+                repo_url = project.get("user_repo_url") or project.get("github_url")
                 token = project.get("github_access_token")
+                if not is_owner:
+                    pa = (
+                        self.supabase.table("project_access")
+                        .select("user_repo_url, github_access_token")
+                        .eq("project_id", project_id)
+                        .eq("user_id", user_id)
+                        .execute()
+                    )
+                    if pa.data:
+                        repo_url = pa.data[0].get("user_repo_url") or project.get("github_url")
+                        token = pa.data[0].get("github_access_token") or token
 
                 if not repo_url:
                     return {

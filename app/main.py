@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.github_consent import router as github_consent_router
+from app.api.invite import router as invite_router
 from app.api.progress import router as progress_router
 from app.api.project_chunks_embeddings import router as project_chunks_embeddings_router
 from app.api.projects import router as projects_router
@@ -144,6 +145,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(invite_router, prefix="/api/invite", tags=["invite"])
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(project_chunks_embeddings_router, prefix="/api/project_chunks_embeddings")

@@ -135,6 +135,7 @@ class IncrementalGenerateRequest(BaseModel):
     """Request to trigger incremental concept generation."""
 
     project_id: str
+    user_id: str | None = None  # Per-user cursor; uses project owner if not provided
 
 
 class GenerateRoadmapInternalRequest(BaseModel):
@@ -174,7 +175,7 @@ async def incremental_generate(request: IncrementalGenerateRequest):
         logger.info(
             f"📞 Calling trigger_incremental_generation_sync for project_id={request.project_id}"
         )
-        trigger_incremental_generation_sync(request.project_id)
+        trigger_incremental_generation_sync(request.project_id, request.user_id)
         logger.info(
             f"✅ trigger_incremental_generation_sync completed for project_id={request.project_id}"
         )

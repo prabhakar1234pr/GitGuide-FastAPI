@@ -698,13 +698,9 @@ def mark_concept_complete(state: RoadmapAgentState) -> RoadmapAgentState:
 
     try:
         # Update concept status in database
+        # Note: Only include columns that exist in minimal schema (generated_status).
+        # attempt_count, failure_reason require a DB migration if you need them.
         update_data: dict[str, Any] = {"generated_status": db_status}
-
-        # Add failure reason if present
-        if current_status.get("failure_reason"):
-            update_data["failure_reason"] = current_status["failure_reason"]
-        if current_status.get("attempt_count"):
-            update_data["attempt_count"] = current_status["attempt_count"]
 
         supabase.table("concepts").update(update_data).eq(
             "concept_id", database_concept_id

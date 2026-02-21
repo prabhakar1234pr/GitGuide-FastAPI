@@ -21,6 +21,18 @@ if [ -n "$GCP_SA_KEY" ]; then
   chmod 600 /app/credentials/service-account.json
   export GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account.json
   echo "✓ GOOGLE_APPLICATION_CREDENTIALS set to /app/credentials/service-account.json"
+else
+  # When GCP_SA_KEY not set: use first .json in mounted credentials (for local Docker with ./credentials volume)
+  if [ -f /app/credentials/service-account.json ]; then
+    export GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account.json
+    echo "✓ Using mounted credentials/service-account.json"
+  else
+    CRED_FILE=$(find /app/credentials -maxdepth 1 -name "*.json" 2>/dev/null | head -1)
+    if [ -n "$CRED_FILE" ]; then
+      export GOOGLE_APPLICATION_CREDENTIALS="$CRED_FILE"
+      echo "✓ Using mounted credentials: $CRED_FILE"
+    fi
+  fi
 fi
 
 # Use PORT from environment (Cloud Run sets this), default to 8080

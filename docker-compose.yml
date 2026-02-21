@@ -76,8 +76,10 @@ services:
       - GCP_PROJECT_ID=${GCP_PROJECT_ID}
       - GCP_LOCATION=${GCP_LOCATION:-us-central1}
       - GCP_SA_KEY=${GCP_SA_KEY}
-      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Use mounted credentials file (must match filename in credentials/ folder)
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/github-actions-sa-key.json
+      # Roadmap uses Vertex AI (service account) only - no GEMINI_API_KEY
+      - EMBEDDING_PROVIDER=vertex_ai
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_API_KEY2=${GROQ_API_KEY2}
       - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY}

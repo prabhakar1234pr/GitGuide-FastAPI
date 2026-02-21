@@ -201,6 +201,18 @@ CREATE TABLE task_sessions (
 );
 
 -- =============================================================================
+-- 12b. terminal_sessions (PTY sessions for interactive terminal in workspaces)
+-- =============================================================================
+CREATE TABLE terminal_sessions (
+    session_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+    exec_id TEXT,
+    name TEXT DEFAULT 'Terminal',
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================================================
 -- 13. task_verification_results
 -- =============================================================================
 CREATE TABLE task_verification_results (
@@ -255,6 +267,7 @@ CREATE INDEX idx_tasks_concept_id ON tasks(concept_id);
 CREATE INDEX idx_project_chunks_project_id ON project_chunks(project_id);
 CREATE INDEX idx_workspaces_user_project ON workspaces(user_id, project_id);
 CREATE INDEX idx_task_sessions_task_user_workspace ON task_sessions(task_id, user_id, workspace_id);
+CREATE INDEX idx_terminal_sessions_workspace_id ON terminal_sessions(workspace_id);
 CREATE INDEX idx_chat_conversations_task_user ON chat_conversations(user_id, project_id, task_id);
 CREATE INDEX idx_chat_messages_conversation_id ON chat_messages(conversation_id);
 

@@ -170,18 +170,46 @@ class ExternalCommitService:
     def _get_project_row(self, project_id: str | None, user_id: str) -> dict[str, object] | None:
         if not project_id:
             return None
-        response = (
+        proj = (
             self.supabase.table("projects")
             .select(
-                "project_id, user_id, user_repo_url, github_access_token, github_consent_accepted"
+                "project_id, user_id, user_repo_url, github_url, github_access_token, github_consent_accepted"
             )
             .eq("project_id", project_id)
             .eq("user_id", user_id)
             .execute()
         )
-        if not response.data:
+        if proj.data:
+            return proj.data[0]
+        pa = (
+            self.supabase.table("project_access")
+            .select("user_repo_url, github_access_token, github_consent_accepted")
+            .eq("project_id", project_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if not pa.data:
             return None
-        return response.data[0]
+        proj_any = (
+            self.supabase.table("projects")
+            .select(
+                "project_id, user_id, user_repo_url, github_url, github_access_token, github_consent_accepted"
+            )
+            .eq("project_id", project_id)
+            .execute()
+        )
+        if not proj_any.data:
+            return None
+        row = dict(proj_any.data[0])
+        pa_row = pa.data[0]
+        row["user_repo_url"] = pa_row.get("user_repo_url") or row.get("github_url")
+        row["github_access_token"] = pa_row.get("github_access_token") or row.get(
+            "github_access_token"
+        )
+        row["github_consent_accepted"] = pa_row.get("github_consent_accepted") or row.get(
+            "github_consent_accepted"
+        )
+        return row
 
     @staticmethod
     def _apply_token(repo_url: str, token: str | None) -> str:

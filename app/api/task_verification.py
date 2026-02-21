@@ -157,17 +157,25 @@ async def verify_task(
                 detail="Managers cannot verify tasks. Only employees can verify and complete tasks in the IDE.",
             )
 
-        project_response = (
+        proj = (
             supabase.table("projects")
             .select("project_id, user_repo_url, github_url")
             .eq("project_id", project_id)
             .execute()
         )
-        if not project_response.data:
+        if not proj.data:
             raise HTTPException(status_code=404, detail="Project not found")
-        project = project_response.data[0]
-        # Use user_repo_url (notebook repo) - agent should never see user's PAT
-        repo_url = project.get("user_repo_url")
+        project = proj.data[0]
+        repo_url = project.get("user_repo_url") or project.get("github_url")
+        pa = (
+            supabase.table("project_access")
+            .select("user_repo_url")
+            .eq("project_id", project_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if pa.data and pa.data[0].get("user_repo_url"):
+            repo_url = pa.data[0]["user_repo_url"]
 
         if not repo_url:
             raise HTTPException(

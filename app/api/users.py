@@ -51,13 +51,22 @@ async def sync_user(
 
         if existing_user_response.data and len(existing_user_response.data) > 0:
             existing = existing_user_response.data[0]
+            existing_role = existing.get("role")
+
+            # Reject if user tries to sign in with different role
+            if role and existing_role and role != existing_role:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Your account is registered as a {existing_role}. Use the {existing_role} sign-in page.",
+                )
+
             update_data = {
                 "email": email,
                 "name": name,
                 "updated_at": datetime.now(UTC).isoformat(),
             }
             # Set role only on first sign-up when provided (existing users keep their role)
-            if role and existing.get("role") is None:
+            if role and existing_role is None:
                 update_data["role"] = role
 
             updated_user_response = (
@@ -73,6 +82,19 @@ async def sync_user(
             logger.info(f"Updated user: {clerk_user_id}")
             return {"success": True, "user": updated_user_response.data[0], "action": "updated"}
         else:
+            # Before creating: reject if email already exists with any role (prevents same email as manager and employee)
+            if email:
+                email_lower = email.strip().lower()
+                existing_by_email = (
+                    supabase.table("User").select("id, role").ilike("email", email_lower).execute()
+                )
+                if existing_by_email.data and len(existing_by_email.data) > 0:
+                    existing_role = existing_by_email.data[0].get("role", "user")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"This email is already registered as a {existing_role}. Sign in with your existing account—you cannot create a new account with a different role.",
+                    )
+
             # Create new user (default role: employee if not specified)
             new_user_data = {
                 "clerk_user_id": clerk_user_id,
@@ -84,6 +106,31 @@ async def sync_user(
 
             if not new_user_response.data:
                 raise HTTPException(status_code=500, detail="Failed to create user")
+
+            new_user_id = new_user_response.data[0]["id"]
+
+            # Grant project_access for any pending invites matching this email
+            if email:
+                invites = (
+                    supabase.table("project_invites")
+                    .select("project_id, granted_by")
+                    .eq("email", email.lower())
+                    .execute()
+                )
+                for inv in invites.data or []:
+                    try:
+                        supabase.table("project_access").insert(
+                            {
+                                "project_id": inv["project_id"],
+                                "user_id": new_user_id,
+                                "granted_by": inv["granted_by"],
+                            }
+                        ).execute()
+                        logger.info(
+                            f"Granted project access from pending invite: {inv['project_id']}"
+                        )
+                    except Exception:
+                        pass  # Ignore duplicate/unique errors
 
             logger.info(f"Created user: {clerk_user_id} with role {new_user_data['role']}")
             return {"success": True, "user": new_user_response.data[0], "action": "created"}

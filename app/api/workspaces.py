@@ -15,7 +15,7 @@ from app.services.external_commit_service import ExternalCommitService
 from app.services.preview_proxy import PORT_MAPPING, get_preview_proxy
 from app.services.workspace_manager import Workspace, get_workspace_manager
 from app.utils.clerk_auth import verify_clerk_token
-from app.utils.db_helpers import get_user_id_from_clerk
+from app.utils.db_helpers import get_user_id_from_clerk, user_has_project_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -69,6 +69,10 @@ async def create_workspace(
     try:
         clerk_user_id = user_info["clerk_user_id"]
         user_id = get_user_id_from_clerk(supabase, clerk_user_id)
+
+        has_access, _ = user_has_project_access(supabase, request.project_id, user_id)
+        if not has_access:
+            raise HTTPException(status_code=404, detail="Project not found")
 
         logger.info(f"Creating workspace for user={user_id}, project={request.project_id}")
 

@@ -9,10 +9,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from fastapi import HTTPException
+
 from app.core.supabase_client import get_supabase_client
 from app.services.docker_client import DockerClient, get_docker_client
 from app.services.git_service import GitService
 from app.services.preview_proxy import PORT_MAPPING
+from app.utils.db_helpers import get_project_if_accessible
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +117,34 @@ class WorkspaceManager:
         )
 
         # Start container immediately
-        success, _ = self.docker.start_container(container_id)
-        if not success:
+        success, is_port_conflict = self.docker.start_container(container_id)
+        if not success and is_port_conflict:
+            # Port conflict - remove and retry with dynamically allocated ports
+            logger.warning(
+                f"Container {container_id[:12]} failed to start (port conflict). Retrying with available ports..."
+            )
+            try:
+                self.docker.remove_container(container_id)
+            except Exception:
+                pass
+            ports = {}
+            base_port = 30001
+            for cp in PORT_MAPPING.keys():
+                ap = self.docker.find_available_port(base_port, base_port + 100)
+                ports[f"{cp}/tcp"] = ("0.0.0.0", ap or PORT_MAPPING[cp])
+                base_port = (ap or PORT_MAPPING[cp]) + 1
+            container_id, status = self.docker.create_container(
+                name=container_name, volume_name=volume_name, ports=ports
+            )
+            success, _ = self.docker.start_container(container_id)
+            if not success:
+                logger.warning(f"Container {container_id[:12]} failed to start after port retry")
+            status = self.docker.get_container_status(container_id)
+        elif not success:
             logger.warning(
                 f"Container {container_id[:12]} failed to start immediately after creation"
             )
-        status = self.docker.get_container_status(container_id)
+            status = self.docker.get_container_status(container_id)
 
         # Save to database
         now = datetime.now(UTC).isoformat()
@@ -253,6 +278,17 @@ class WorkspaceManager:
                         "Recreating container..."
                     )
                     return self._recreate_container(existing)
+                # Container exists but may not be running (e.g. status "created" or "exited")
+                if existing.container_status != "running":
+                    logger.info(
+                        f"[GET_OR_CREATE] Container not running (status: {existing.container_status}), starting..."
+                    )
+                    if not self.start_workspace(existing.workspace_id):
+                        raise RuntimeError(
+                            f"Failed to start workspace container (status: {existing.container_status}). "
+                            "Container may have port conflicts - try recreating the workspace."
+                        )
+                    existing = self.get_workspace(existing.workspace_id) or existing
 
             # Update last_active_at
             self._update_last_active(existing.workspace_id)
@@ -316,8 +352,19 @@ class WorkspaceManager:
         )
 
         # Start container immediately
-        success, _ = self.docker.start_container(container_id)
-        if not success:
+        success, is_port_conflict = self.docker.start_container(container_id)
+        if not success and is_port_conflict and not use_available_ports:
+            # Port conflict with default ports - retry with dynamic port allocation
+            logger.warning(
+                f"Container {container_id[:12]} failed to start (port conflict). Recreating with available ports..."
+            )
+            try:
+                self.docker.stop_container(container_id)
+                self.docker.remove_container(container_id)
+            except Exception:
+                pass
+            return self._recreate_container(workspace, use_available_ports=True)
+        elif not success:
             logger.warning(
                 f"Container {container_id[:12]} failed to start immediately after recreation"
             )
@@ -402,21 +449,53 @@ class WorkspaceManager:
                 "error": f"Container not running ({workspace.container_status})",
             }
 
-        project_response = (
-            self.supabase.table("projects")
-            .select("project_id, user_repo_url, github_access_token")
-            .eq("project_id", workspace.project_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        if not project_response.data:
-            return {"success": False, "error": "Project not found"}
+        # Get project - works for both owners (managers) and employees with project_access
+        try:
+            project, is_owner = get_project_if_accessible(
+                self.supabase,
+                workspace.project_id,
+                user_id,
+                select_fields="project_id, user_id, user_repo_url, github_url, github_access_token",
+            )
+        except HTTPException as e:
+            return {"success": False, "error": e.detail or "Project not found"}
 
-        project = project_response.data[0]
-        repo_url = project.get("user_repo_url")
+        # Repo URL: managers use project.user_repo_url or project.github_url; employees use project_access.user_repo_url (Day 0) or project.github_url
+        template_url = project.get("github_url") or ""
+        repo_url = project.get("user_repo_url") or template_url
+        if not is_owner:
+            try:
+                pa = (
+                    self.supabase.table("project_access")
+                    .select("user_repo_url")
+                    .eq("project_id", workspace.project_id)
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+                employee_repo = (pa.data[0].get("user_repo_url") if pa.data else None) or ""
+                repo_url = (employee_repo.strip() if employee_repo else None) or template_url
+            except Exception:
+                repo_url = template_url
         token = project.get("github_access_token")
-        if not repo_url:
-            return {"success": False, "error": "Repository URL missing"}
+        if not is_owner:
+            try:
+                pa_token = (
+                    self.supabase.table("project_access")
+                    .select("github_access_token")
+                    .eq("project_id", workspace.project_id)
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+                if pa_token.data and pa_token.data[0].get("github_access_token"):
+                    token = pa_token.data[0]["github_access_token"]
+            except Exception:
+                pass
+        if not (repo_url or "").strip():
+            return {
+                "success": True,
+                "skipped": True,
+                "message": "No repository URL set. Complete Day 0 Task 2 (Create Your Repository) or ensure the project has a GitHub URL.",
+            }
 
         git_service = GitService()
         clone_result = git_service.clone_repository(
@@ -424,6 +503,17 @@ class WorkspaceManager:
             repo_url,
             token=token or None,
         )
+
+        if clone_result.get("status") == "already_cloned":
+            current_remote = git_service.git_get_remote_url(workspace.container_id)
+            if current_remote.get("success"):
+                current_url = self._normalize_repo_url(current_remote.get("url", ""))
+                desired_url = self._normalize_repo_url(repo_url)
+                if current_url and desired_url and current_url != desired_url:
+                    logger.info(f"Remote URL changed, updating: {current_url} -> {desired_url}")
+                    new_url = git_service._inject_token(repo_url, token) if token else repo_url
+                    git_service.git_set_remote_url(workspace.container_id, new_url)
+
         if clone_result.get("status") == "error":
             msg = clone_result.get("message", "Clone failed")
             lower = (msg or "").lower()
@@ -638,6 +728,20 @@ class WorkspaceManager:
         self.supabase.table(self.table_name).update({"last_active_at": now}).eq(
             "workspace_id", workspace_id
         ).execute()
+
+    @staticmethod
+    def _normalize_repo_url(url: str) -> str:
+        """Normalize repo URL by stripping auth and trailing artifacts."""
+        import re
+
+        cleaned = url.strip()
+        match = re.match(r"(https?://)(?:[^@]+@)+([^/]+(?:/.*)?)", cleaned)
+        if match:
+            cleaned = match.group(1) + match.group(2)
+        else:
+            cleaned = re.sub(r"^(https?://)[^@]+@", r"\1", cleaned)
+        cleaned = cleaned[:-4] if cleaned.endswith(".git") else cleaned
+        return cleaned.rstrip("/")
 
 
 # Singleton instance

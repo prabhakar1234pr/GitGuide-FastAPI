@@ -143,6 +143,17 @@ class Settings(BaseSettings):
     # Redis (for rate limiting and caching)
     redis_url: str | None = None  # Maps to REDIS_URL (e.g., redis://localhost:6379/0)
 
+    # SMTP (for access-invite emails)
+    smtp_host: str | None = None  # e.g. smtp.gmail.com
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None  # From address (defaults to smtp_user)
+    smtp_use_tls: bool = True  # True = STARTTLS on port 587, False = SSL on port 465
+
+    # Frontend base URL (for invite links)
+    frontend_base_url: str = "http://localhost:3000"
+
     # Logging
     log_level: str = "INFO"
 

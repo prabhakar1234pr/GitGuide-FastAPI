@@ -72,7 +72,7 @@ async def _get_identity_token(target_url: str) -> str:
     return await asyncio.to_thread(_get_identity_token_sync, target_url)
 
 
-async def call_roadmap_service_incremental(project_id: str) -> dict:
+async def call_roadmap_service_incremental(project_id: str, user_id: str | None = None) -> dict:
     """
     Call the roadmap service to trigger incremental concept generation.
 
@@ -82,6 +82,7 @@ async def call_roadmap_service_incremental(project_id: str) -> dict:
 
     Args:
         project_id: UUID of the project
+        user_id: UUID of the user who completed (for per-user cursor; falls back to owner if None)
 
     Returns:
         dict with success status and message
@@ -117,7 +118,9 @@ async def call_roadmap_service_incremental(project_id: str) -> dict:
 
     logger.info(f"🔐 Using X-Internal-Token (length: {len(settings.internal_auth_token)})")
     logger.info(f"🔐 Token (first 20 chars): {settings.internal_auth_token[:20]}...")
-    payload = {"project_id": project_id}
+    payload: dict[str, str] = {"project_id": project_id}
+    if user_id:
+        payload["user_id"] = user_id
 
     logger.info("=" * 70)
     logger.info("📞 CALLING ROADMAP SERVICE FOR INCREMENTAL GENERATION")
@@ -318,7 +321,7 @@ async def call_roadmap_service_generate(
         raise
 
 
-def call_roadmap_service_incremental_sync(project_id: str) -> dict:
+def call_roadmap_service_incremental_sync(project_id: str, user_id: str | None = None) -> dict:
     """
     Synchronous wrapper for incremental generation call.
 
@@ -326,6 +329,7 @@ def call_roadmap_service_incremental_sync(project_id: str) -> dict:
 
     Args:
         project_id: UUID of the project
+        user_id: UUID of the user who completed (for per-user cursor)
 
     Returns:
         dict with success status and message
@@ -338,4 +342,4 @@ def call_roadmap_service_incremental_sync(project_id: str) -> dict:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    return loop.run_until_complete(call_roadmap_service_incremental(project_id))
+    return loop.run_until_complete(call_roadmap_service_incremental(project_id, user_id))

@@ -405,7 +405,6 @@ async def _save_tasks_to_db(
                         "difficulty": str(task.get("difficulty", "medium")),
                         "hints": task.get("hints", []),
                         "solution": task.get("solution"),
-                        "verification_type": "llm",
                         "generated_status": "generated",
                     }
                 )
