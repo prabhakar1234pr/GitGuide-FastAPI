@@ -43,3 +43,13 @@ def health_check():
         "service": "AI Tutor for GitHub Repositories",
         "message": "🚀 Backend is running smoothly!",
     }
+
+
+@router.get("/status")
+def status_check():
+    """Status check endpoint (alias for health, stops external polling 404s)."""
+    return {
+        "status": "healthy",
+        "service": "AI Tutor for GitHub Repositories",
+        "message": "🚀 Backend is running smoothly!",
+    }

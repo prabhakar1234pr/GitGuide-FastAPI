@@ -98,6 +98,17 @@ logger = logging.getLogger(__name__)
 
 # Lite models have separate quota - use when main model hits 429
 _GEMINI_API_LITE_FALLBACK = "gemini-2.0-flash-lite"
+_VERTEX_AI_LITE_FALLBACK = "gemini-2.0-flash-lite"
+
+
+def _google_vertex_model_for(model_name: str) -> GoogleModel:
+    """Vertex AI model with specific name (for fallbacks)."""
+    if not settings.gcp_project_id:
+        raise ValueError("GCP_PROJECT_ID is required for Vertex AI")
+    provider = GoogleProvider(
+        vertexai=True, project=settings.gcp_project_id, location=settings.gcp_location
+    )
+    return GoogleModel(model_name, provider=provider)
 
 
 def _google_gla_model_for(model_name: str) -> GoogleModel:
@@ -164,15 +175,17 @@ async def run_gemini_structured[T](
         if settings.gemini_api_key:
             logger.info(f"Using fallback model: {_GEMINI_API_LITE_FALLBACK}")
             fallback = _google_gla_model_for(_GEMINI_API_LITE_FALLBACK)
-            fallback_agent = Agent(
-                fallback,
-                system_prompt=system_prompt,
-                output_type=output_type,
-                model_settings=model_settings or {},
-            )
-            result = await fallback_agent.run(user_prompt)
-            return result.output
-        raise
+        else:
+            logger.info(f"Using Vertex AI fallback model: {_VERTEX_AI_LITE_FALLBACK}")
+            fallback = _google_vertex_model_for(_VERTEX_AI_LITE_FALLBACK)
+        fallback_agent = Agent(
+            fallback,
+            system_prompt=system_prompt,
+            output_type=output_type,
+            model_settings=model_settings or {},
+        )
+        result = await fallback_agent.run(user_prompt)
+        return result.output
 
 
 async def run_groq_structured[T](
