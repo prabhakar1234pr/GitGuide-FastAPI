@@ -25,6 +25,8 @@ services:
       - GCP_LOCATION=${GCP_LOCATION:-us-central1}
       - GCP_SA_KEY=${GCP_SA_KEY}
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-vertex_ai}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-text-embedding-005}
       # Verification overrides (separate Vertex AI project/model/quota)
       - VERIFICATION_GCP_PROJECT_ID=${VERIFICATION_GCP_PROJECT_ID}
       - VERIFICATION_GCP_LOCATION=${VERIFICATION_GCP_LOCATION}
@@ -80,6 +82,7 @@ services:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/github-actions-sa-key.json
       # Roadmap uses Vertex AI (service account) only - no GEMINI_API_KEY
       - EMBEDDING_PROVIDER=vertex_ai
+      - EMBEDDING_MODEL_NAME=text-embedding-005
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_API_KEY2=${GROQ_API_KEY2}
       - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY}

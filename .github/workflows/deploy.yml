@@ -102,6 +102,8 @@ jobs:
             ENVIRONMENT=production
             GCP_PROJECT_ID=${{ env.PROJECT_ID }}
             GCP_LOCATION=${{ env.REGION }}
+            EMBEDDING_PROVIDER=vertex_ai
+            EMBEDDING_MODEL_NAME=text-embedding-005
             VERIFICATION_GCP_PROJECT_ID=${{ secrets.VERIFICATION_GCP_PROJECT_ID }}
             VERIFICATION_GCP_LOCATION=${{ secrets.VERIFICATION_GCP_LOCATION }}
             VERIFICATION_GEMINI_MODEL=${{ secrets.VERIFICATION_GEMINI_MODEL }}
@@ -146,6 +148,8 @@ jobs:
             ENVIRONMENT=production
             GCP_PROJECT_ID=${{ env.PROJECT_ID }}
             GCP_LOCATION=${{ env.REGION }}
+            EMBEDDING_PROVIDER=vertex_ai
+            EMBEDDING_MODEL_NAME=text-embedding-005
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
             SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}
             DATABASE_URL=${{ secrets.DATABASE_URL }}
