@@ -362,10 +362,18 @@ class EmbeddingService:
             raise
 
     def _embed_vertex_ai(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings using Vertex AI."""
-        embeddings = self._vertex_ai_client.get_embeddings(texts)
-        # Vertex AI returns list of EmbeddingValue objects
-        return [emb.values for emb in embeddings]
+        """Generate embeddings using Vertex AI with batching to stay under token limits.
+
+        text-embedding-005 has a 20,000 token per-request limit.
+        With ~1,000 token chunks we batch conservatively at 5 texts per request.
+        """
+        batch_size = 5
+        all_embeddings: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            embeddings = self._vertex_ai_client.get_embeddings(batch)
+            all_embeddings.extend(emb.values for emb in embeddings)
+        return all_embeddings
 
     def _embed_gemini_api(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using Gemini API (API key, no GCP permissions)."""
