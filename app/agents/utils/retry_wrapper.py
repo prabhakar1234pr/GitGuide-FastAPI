@@ -11,8 +11,8 @@ from typing import Any, TypeVar
 logger = logging.getLogger(__name__)
 
 # Retry configuration
-MAX_RETRIES = 2  # Maximum number of retry attempts (total attempts = MAX_RETRIES + 1)
-BASE_BACKOFF_SECONDS = 2  # Base wait time for exponential backoff
+MAX_RETRIES = 3  # Maximum number of retry attempts (total attempts = MAX_RETRIES + 1)
+BASE_BACKOFF_SECONDS = 5  # Base wait time for exponential backoff
 
 
 # Type variable for generic function wrapping
@@ -71,6 +71,8 @@ def classify_error(error: Exception) -> type[ConceptGenerationError]:
         keyword in error_str
         for keyword in [
             "rate limit",
+            "resource_exhausted",
+            "resource exhausted",
             "timeout",
             "connection",
             "429",
@@ -79,6 +81,7 @@ def classify_error(error: Exception) -> type[ConceptGenerationError]:
             "groq",
             "api error",
             "http error",
+            "modelhttperror",
         ]
     ):
         return LLMError
@@ -241,7 +244,16 @@ async def generate_with_retry(
             await asyncio.sleep(wait_time)
 
         except Exception as e:
-            # Unexpected errors - don't retry (might be programming errors)
+            classified = classify_error(e)
+            if classified is LLMError and attempt < MAX_RETRIES:
+                wait_time = BASE_BACKOFF_SECONDS * (2 ** (attempt + 1))
+                logger.warning(
+                    f"⚠️  Attempt {attempt + 1} failed for {concept_label} "
+                    f"(retryable {type(e).__name__}). Retrying in {wait_time}s: {e}"
+                )
+                await asyncio.sleep(wait_time)
+                continue
+
             status["content_status"] = "failed"
             status["failure_reason"] = f"unexpected: {str(e)}"
             logger.error(

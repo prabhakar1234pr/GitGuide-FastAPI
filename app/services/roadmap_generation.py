@@ -506,17 +506,3 @@ async def run_incremental_concept_generation(project_id: str, user_id_override: 
         logger.error(f"   ⚠️  Error Message: {str(e)}")
         logger.error("=" * 70, exc_info=True)
         # Don't raise - this is a background task
-
-
-def trigger_incremental_generation_sync(project_id: str, user_id: str | None = None):
-    """
-    Synchronous wrapper to trigger incremental concept generation.
-
-    This is used by FastAPI BackgroundTasks.
-    Uses asyncio.run() for isolated event loop (avoids "Event loop is closed").
-
-    Args:
-        project_id: UUID of the project
-        user_id: UUID of the user who completed (per-user cursor; uses project owner if None)
-    """
-    asyncio.run(run_incremental_concept_generation(project_id, user_id))
