@@ -148,7 +148,9 @@ class GenerateRoadmapInternalRequest(BaseModel):
 
 
 @app.post("/api/roadmap/incremental-generate", dependencies=[Depends(verify_internal_auth)])
-async def incremental_generate(request: IncrementalGenerateRequest):
+async def incremental_generate(
+    request: IncrementalGenerateRequest, background_tasks: BackgroundTasks
+):
     """
     Internal endpoint to trigger incremental concept generation.
 
@@ -170,15 +172,17 @@ async def incremental_generate(request: IncrementalGenerateRequest):
         logger.info(f"🔄 Starting incremental generation for project_id={request.project_id}")
         logger.debug(f"   Request payload: {request.model_dump()}")
 
-        # Trigger incremental generation (runs synchronously in background)
-        # This will run the LangGraph workflow to generate concepts up to n+2 ahead
+        # Use BackgroundTasks - sync wrapper runs in thread pool (asyncio.run works there)
+        # Cannot call asyncio.run() from async endpoint (already in event loop)
         logger.info(
-            f"📞 Calling trigger_incremental_generation_sync for project_id={request.project_id}"
+            f"📞 Adding incremental generation to background tasks for project_id={request.project_id}"
         )
-        trigger_incremental_generation_sync(request.project_id, request.user_id)
-        logger.info(
-            f"✅ trigger_incremental_generation_sync completed for project_id={request.project_id}"
+        background_tasks.add_task(
+            trigger_incremental_generation_sync,
+            project_id=request.project_id,
+            user_id=request.user_id,
         )
+        logger.info(f"✅ Incremental generation task queued for project_id={request.project_id}")
 
         logger.info("=" * 70)
         logger.info("✅ INCREMENTAL GENERATION TRIGGERED SUCCESSFULLY")
