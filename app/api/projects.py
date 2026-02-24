@@ -247,6 +247,7 @@ async def _initialize_day0_internal(project_id: str, user_id: str, supabase: Cli
         concepts_to_insert.append(
             {
                 "day_id": day0_id,
+                "project_id": project_id,
                 "order_index": concept["order_index"],
                 "title": concept["title"],
                 "description": concept["description"],
@@ -472,6 +473,7 @@ async def initialize_day0_content(
             concepts_to_insert.append(
                 {
                     "day_id": day0_id,
+                    "project_id": project_id,
                     "order_index": concept["order_index"],
                     "title": concept["title"],
                     "description": concept["description"],

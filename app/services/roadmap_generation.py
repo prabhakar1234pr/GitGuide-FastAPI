@@ -265,8 +265,19 @@ async def run_incremental_concept_generation(project_id: str, user_id_override: 
             logger.warning("=" * 70)
             return
 
-        # Load concept_status_map from concepts table
-        # Try to load curriculum_id if it exists, otherwise match by title
+        # Load day_ids first (concepts link to project via day_id -> roadmap_days)
+        days_response = (
+            supabase.table("roadmap_days")
+            .select("day_id, day_number")
+            .eq("project_id", project_id)
+            .execute()
+        )
+        day_ids = [d["day_id"] for d in (days_response.data or [])]
+        if not day_ids:
+            logger.warning("No roadmap_days found for project, skipping incremental generation")
+            return
+
+        # Load concept_status_map from concepts table (use project_id if available, else day_id)
         concepts_response = (
             supabase.table("concepts")
             .select("concept_id, generated_status, title, curriculum_id")
@@ -322,27 +333,33 @@ async def run_incremental_concept_generation(project_id: str, user_id_override: 
             }
             concept_ids_map[curriculum_id] = db_concept_id
 
-        # Load day_ids_map
-        days_response = (
-            supabase.table("roadmap_days")
-            .select("day_id, day_number")
-            .eq("project_id", project_id)
-            .execute()
-        )
-
+        # Build day_ids_map from days_response (already loaded above)
         day_ids_map: dict[int, str] = {}
         for day in days_response.data or []:
             day_ids_map[day["day_number"]] = day["day_id"]
 
         # Load memory_ledger from completed concepts
-        # Get concepts that are completed and extract their summaries
+        # concepts: curriculum_id, title; concept_summaries: summary_text, files_touched, skills_unlocked
         completed_concepts_response = (
             supabase.table("concepts")
-            .select("concept_id, summary, files_touched, skills_unlocked, curriculum_id, title")
+            .select("concept_id, curriculum_id, title")
             .eq("project_id", project_id)
             .eq("generated_status", "generated")
             .execute()
         )
+
+        # Fetch concept_summaries for completed concepts (summary_text, files_touched, skills_unlocked)
+        completed_concept_ids = [c["concept_id"] for c in (completed_concepts_response.data or [])]
+        concept_summaries_data: dict[str, dict] = {}
+        if completed_concept_ids:
+            summaries_response = (
+                supabase.table("concept_summaries")
+                .select("concept_id, summary_text, files_touched, skills_unlocked")
+                .in_("concept_id", completed_concept_ids)
+                .execute()
+            )
+            for row in summaries_response.data or []:
+                concept_summaries_data[str(row["concept_id"])] = row
 
         memory_ledger: MemoryLedger = {
             "completed_concepts": [],
@@ -363,12 +380,13 @@ async def run_incremental_concept_generation(project_id: str, user_id_override: 
                     continue
 
             memory_ledger["completed_concepts"].append(curriculum_id)
-            if concept.get("summary"):
-                concept_summaries[curriculum_id] = concept["summary"]
-            if concept.get("files_touched"):
-                memory_ledger["files_touched"].extend(concept["files_touched"] or [])
-            if concept.get("skills_unlocked"):
-                memory_ledger["skills_unlocked"].extend(concept["skills_unlocked"] or [])
+            summary_row = concept_summaries_data.get(str(db_concept_id), {})
+            if summary_row.get("summary_text"):
+                concept_summaries[curriculum_id] = summary_row["summary_text"]
+            if summary_row.get("files_touched"):
+                memory_ledger["files_touched"].extend(summary_row["files_touched"] or [])
+            if summary_row.get("skills_unlocked"):
+                memory_ledger["skills_unlocked"].extend(summary_row["skills_unlocked"] or [])
 
         # Determine user's current concept from user_concept_progress table
         from app.agents.nodes.save_to_db import get_user_current_concept_from_progress

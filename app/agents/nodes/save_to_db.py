@@ -246,6 +246,7 @@ def save_all_concepts_to_db(state: RoadmapAgentState) -> RoadmapAgentState:
     """
     curriculum = state.get("curriculum", {})
     day_ids_map = state.get("day_ids_map", {})
+    project_id = state.get("project_id")
 
     # Extract concepts from curriculum
     if isinstance(curriculum, dict):
@@ -305,6 +306,8 @@ def save_all_concepts_to_db(state: RoadmapAgentState) -> RoadmapAgentState:
                 "estimated_minutes": 15,  # Default, updated during generation
                 "generated_status": "pending",
             }
+            if project_id:
+                concept_data["project_id"] = project_id
 
             # Add new curriculum metadata fields if database supports them
             # These are optional and may not exist in older schema versions
