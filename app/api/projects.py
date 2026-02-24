@@ -74,14 +74,15 @@ async def create_project(
             supabase.table("User").select("id, role").eq("clerk_user_id", clerk_user_id).execute()
         )
 
-        if not user_response.data or len(user_response.data) == 0:
+        user_data = user_response.data if user_response.data is not None else []
+        if not user_data or len(user_data) == 0:
             raise HTTPException(
                 status_code=404,
                 detail="User not found in database. Please ensure you're logged in.",
             )
 
-        user_id = user_response.data[0]["id"]
-        user_role = user_response.data[0].get("role") or "employee"
+        user_id = user_data[0]["id"]
+        user_role = user_data[0].get("role") or "employee"
 
         if user_role != "manager":
             raise HTTPException(
@@ -112,10 +113,11 @@ async def create_project(
         # Insert project into projects table
         project_response = supabase.table("projects").insert(project_insert).execute()
 
-        if not project_response.data or len(project_response.data) == 0:
+        proj_data = project_response.data if project_response.data is not None else []
+        if not proj_data or len(proj_data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create project")
 
-        created_project = project_response.data[0]
+        created_project = proj_data[0]
         project_id = created_project["project_id"]
         github_url = created_project["github_url"]
 
@@ -906,6 +908,19 @@ async def revoke_project_access(
         supabase.table("project_access").delete().eq("project_id", project_id).eq(
             "user_id", access_user_id
         ).execute()
+
+        # Clean up revoked employee's workspace and terminal sessions
+        workspace_manager = get_workspace_manager()
+        employee_workspaces = workspace_manager.get_workspaces_by_project(project_id)
+        terminal_service = get_terminal_service()
+        for ws in employee_workspaces:
+            if ws.user_id == access_user_id:
+                try:
+                    terminal_service.delete_sessions_for_workspace(ws.workspace_id)
+                    workspace_manager.destroy_workspace(ws.workspace_id, delete_volume=True)
+                    logger.info(f"Cleaned up workspace {ws.workspace_id[:8]} for revoked user")
+                except Exception as e:
+                    logger.warning(f"Failed to clean workspace on revoke: {e}")
 
         return {"success": True, "message": "Access revoked"}
 

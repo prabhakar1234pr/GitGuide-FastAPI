@@ -111,12 +111,15 @@ def mock_supabase_client(monkeypatch):
         chain = Mock()
         chain.select = Mock(return_value=chain)
         chain.eq = Mock(return_value=chain)
+        chain.ilike = Mock(return_value=chain)
         chain.order = Mock(return_value=chain)
         chain.range = Mock(return_value=chain)
         chain.insert = Mock(return_value=chain)
         chain.update = Mock(return_value=chain)
         chain.delete = Mock(return_value=chain)
-        chain.execute = Mock(return_value=Mock(data=[]))
+        exec_result = Mock()
+        exec_result.data = []
+        chain.execute = Mock(return_value=exec_result)
         return chain
 
     # Create default mock table

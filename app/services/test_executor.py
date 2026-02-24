@@ -17,6 +17,8 @@ class TestExecutor:
     Supports multiple test frameworks (pytest, jest, mocha, unittest, etc.).
     """
 
+    __test__ = False  # Prevent pytest from collecting this as a test class
+
     def __init__(self, docker_client: DockerClient | None = None):
         self.docker = docker_client or get_docker_client()
 

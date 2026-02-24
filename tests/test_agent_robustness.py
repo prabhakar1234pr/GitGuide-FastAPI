@@ -9,8 +9,8 @@ from app.agents.roadmap_agent import (
     build_roadmap_graph,
     get_roadmap_graph,
     run_roadmap_agent,
-    should_continue_generation,
-    should_generate_more_concepts,
+    should_continue_after_concept,
+    should_continue_concept_generation,
 )
 from app.agents.state import RoadmapAgentState
 from app.agents.utils import (
@@ -167,7 +167,7 @@ class TestRecursionLimitCalculation:
         """Test recursion limit for large roadmap."""
         limit = calculate_recursion_limit(target_days=30, avg_concepts_per_day=5)
         assert limit >= 50
-        assert limit <= 500
+        assert limit <= 1000  # Implementation caps at 1000
 
     def test_calculate_recursion_limit_scales(self):
         """Test recursion limit scales with target_days."""
@@ -289,156 +289,97 @@ class TestMemoryOptimization:
         assert cleaned_state["day_ids_map"] is not None
 
 
+def _minimal_roadmap_state(**overrides) -> RoadmapAgentState:
+    """Build minimal RoadmapAgentState for conditional edge tests."""
+    base: RoadmapAgentState = {
+        "project_id": "test-id",
+        "github_url": "https://github.com/user/repo",
+        "skill_level": "beginner",
+        "target_days": 14,
+        "repo_analysis": None,
+        "curriculum": {
+            "days": [
+                {"day_number": 1, "theme": "Test", "description": "Test", "concept_ids": ["c1"]}
+            ],
+            "concepts": {
+                "c1": {
+                    "title": "C1",
+                    "objective": "X",
+                    "repo_anchors": [],
+                    "depends_on": [],
+                    "difficulty": "easy",
+                }
+            },
+            "dependency_graph": {},
+        },
+        "concept_status_map": {},
+        "concept_summaries": {},
+        "memory_ledger": {"completed_concepts": [], "files_touched": [], "skills_unlocked": []},
+        "user_current_concept_id": None,
+        "current_day_number": 0,
+        "current_day_id": None,
+        "current_concepts": [],
+        "current_concept_index": 0,
+        "memory_context": None,
+        "day_ids_map": None,
+        "concept_ids_map": None,
+        "is_complete": False,
+        "is_paused": False,
+        "error": None,
+        "_last_generated_concept_id": None,
+        "_user_id": None,
+        "rag_chunks": None,
+    }
+    base.update(overrides)
+    return base
+
+
 class TestConditionalEdges:
     """Test conditional edge functions."""
 
-    def test_should_continue_generation_complete(self):
-        """Test should_continue_generation when complete."""
-        state: RoadmapAgentState = {
-            "project_id": "test-id",
-            "github_url": "https://github.com/user/repo",
-            "skill_level": "beginner",
-            "target_days": 14,
-            "repo_analysis": None,
-            "curriculum": [],
-            "current_day_number": 14,
-            "current_day_id": None,
-            "current_concepts": [],
-            "current_concept_index": 0,
-            "day_ids_map": None,
-            "concept_ids_map": None,
-            "is_complete": True,
-            "error": None,
-            "progress": None,
-            "start_time": None,
-            "last_updated": None,
-        }
-
-        result = should_continue_generation(state)
+    def test_should_continue_concept_generation_complete(self):
+        """Test should_continue_concept_generation when complete."""
+        state = _minimal_roadmap_state(is_complete=True)
+        result = should_continue_concept_generation(state)
         assert result == "end"
 
-    def test_should_continue_generation_has_error(self):
-        """Test should_continue_generation when error exists."""
-        state: RoadmapAgentState = {
-            "project_id": "test-id",
-            "github_url": "https://github.com/user/repo",
-            "skill_level": "beginner",
-            "target_days": 14,
-            "repo_analysis": None,
-            "curriculum": [],
-            "current_day_number": 5,
-            "current_day_id": None,
-            "current_concepts": [],
-            "current_concept_index": 0,
-            "day_ids_map": None,
-            "concept_ids_map": None,
-            "is_complete": False,
-            "error": "Test error",
-            "progress": None,
-            "start_time": None,
-            "last_updated": None,
-        }
-
-        result = should_continue_generation(state)
+    def test_should_continue_concept_generation_has_error(self):
+        """Test should_continue_concept_generation when error exists."""
+        state = _minimal_roadmap_state(error="Test error")
+        result = should_continue_concept_generation(state)
         assert result == "end"
 
-    def test_should_continue_generation_continue(self):
-        """Test should_continue_generation when should continue."""
-        state: RoadmapAgentState = {
-            "project_id": "test-id",
-            "github_url": "https://github.com/user/repo",
-            "skill_level": "beginner",
-            "target_days": 14,
-            "repo_analysis": None,
-            "curriculum": [],
-            "current_day_number": 5,
-            "current_day_id": None,
-            "current_concepts": [],
-            "current_concept_index": 0,
-            "day_ids_map": None,
-            "concept_ids_map": None,
-            "is_complete": False,
-            "error": None,
-            "progress": None,
-            "start_time": None,
-            "last_updated": None,
-        }
+    def test_should_continue_concept_generation_continue(self):
+        """Test should_continue_concept_generation when concepts remain."""
+        state = _minimal_roadmap_state(
+            concept_status_map={
+                "c1": {"status": "empty", "attempt_count": 0, "failure_reason": None}
+            }
+        )
+        result = should_continue_concept_generation(state)
+        assert result == "build_memory_context"
 
-        result = should_continue_generation(state)
-        assert result == "generate_content"
+    def test_should_continue_concept_generation_all_done(self):
+        """Test should_continue_concept_generation when all concepts done."""
+        state = _minimal_roadmap_state(
+            concept_status_map={
+                "c1": {"status": "ready", "attempt_count": 1, "failure_reason": None}
+            }
+        )
+        result = should_continue_concept_generation(state)
+        assert result == "end"
 
-    def test_should_generate_more_concepts_yes(self):
-        """Test should_generate_more_concepts when more concepts exist."""
-        state: RoadmapAgentState = {
-            "project_id": "test-id",
-            "github_url": "https://github.com/user/repo",
-            "skill_level": "beginner",
-            "target_days": 14,
-            "repo_analysis": None,
-            "curriculum": [],
-            "current_day_number": 5,
-            "current_day_id": None,
-            "current_concepts": [
-                {
-                    "order_index": 1,
-                    "title": "Concept 1",
-                    "description": "Test",
-                    "subconcepts": [],
-                    "tasks": [],
-                },
-                {
-                    "order_index": 2,
-                    "title": "Concept 2",
-                    "description": "Test",
-                    "subconcepts": [],
-                    "tasks": [],
-                },
-            ],
-            "current_concept_index": 0,
-            "day_ids_map": None,
-            "concept_ids_map": None,
-            "is_complete": False,
-            "error": None,
-            "progress": None,
-            "start_time": None,
-            "last_updated": None,
-        }
+    def test_should_continue_after_concept_complete(self):
+        """Test should_continue_after_concept when complete."""
+        state = _minimal_roadmap_state(is_complete=True)
+        result = should_continue_after_concept(state)
+        assert result == "end"
 
-        result = should_generate_more_concepts(state)
-        assert result == "generate_concept_content"
-
-    def test_should_generate_more_concepts_no(self):
-        """Test should_generate_more_concepts when no more concepts."""
-        state: RoadmapAgentState = {
-            "project_id": "test-id",
-            "github_url": "https://github.com/user/repo",
-            "skill_level": "beginner",
-            "target_days": 14,
-            "repo_analysis": None,
-            "curriculum": [],
-            "current_day_number": 5,
-            "current_day_id": None,
-            "current_concepts": [
-                {
-                    "order_index": 1,
-                    "title": "Concept 1",
-                    "description": "Test",
-                    "subconcepts": [],
-                    "tasks": [],
-                },
-            ],
-            "current_concept_index": 1,  # Past the last concept
-            "day_ids_map": None,
-            "concept_ids_map": None,
-            "is_complete": False,
-            "error": None,
-            "progress": None,
-            "start_time": None,
-            "last_updated": None,
-        }
-
-        result = should_generate_more_concepts(state)
-        assert result == "mark_day_complete"
+    def test_should_continue_after_concept_has_error(self):
+        """Test should_continue_after_concept when error exists."""
+        state = _minimal_roadmap_state(error="Test error")
+        result = should_continue_after_concept(state)
+        assert result == "end"
 
 
 class TestGraphBuilding:

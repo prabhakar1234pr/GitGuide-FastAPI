@@ -18,11 +18,11 @@ class TestProjectsAPI:
         # Setup mocks
         mock_table = mock_supabase_client.table.return_value
 
-        # Mock: user exists (first select)
+        # Mock: user exists (first select) - role=manager required to create projects
         mock_select_chain1 = Mock()
         mock_select_chain1.select.return_value = mock_select_chain1
         mock_select_chain1.eq.return_value = mock_select_chain1
-        mock_select_chain1.execute.return_value.data = [{"id": "user_123"}]
+        mock_select_chain1.execute.return_value.data = [{"id": "user_123", "role": "manager"}]
         mock_table.select.return_value = mock_select_chain1
 
         # Mock: insert project

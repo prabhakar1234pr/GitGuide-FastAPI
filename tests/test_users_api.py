@@ -16,11 +16,14 @@ class TestUsersAPI:
         # Setup mocks
         mock_table = mock_supabase_client.table.return_value
 
-        # Mock: user doesn't exist (first select)
+        # Mock: user doesn't exist (first select by clerk_user_id)
         mock_select_chain1 = Mock()
         mock_select_chain1.select.return_value = mock_select_chain1
         mock_select_chain1.eq.return_value = mock_select_chain1
-        mock_select_chain1.execute.return_value.data = []
+        mock_select_chain1.ilike.return_value = mock_select_chain1
+        mock_execute_result = Mock()
+        mock_execute_result.data = []
+        mock_select_chain1.execute.return_value = mock_execute_result
         mock_table.select.return_value = mock_select_chain1
 
         # Mock: insert new user

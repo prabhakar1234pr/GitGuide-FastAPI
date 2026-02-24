@@ -88,8 +88,9 @@ async def sync_user(
                 existing_by_email = (
                     supabase.table("User").select("id, role").ilike("email", email_lower).execute()
                 )
-                if existing_by_email.data and len(existing_by_email.data) > 0:
-                    existing_role = existing_by_email.data[0].get("role", "user")
+                data = existing_by_email.data if existing_by_email.data is not None else []
+                if data and len(data) > 0:
+                    existing_role = data[0].get("role", "user")
                     raise HTTPException(
                         status_code=403,
                         detail=f"This email is already registered as a {existing_role}. Sign in with your existing account—you cannot create a new account with a different role.",
@@ -156,10 +157,11 @@ async def get_current_user(
             supabase.table("User").select("*").eq("clerk_user_id", clerk_user_id).execute()
         )
 
-        if not user_response.data or len(user_response.data) == 0:
+        data = user_response.data if user_response.data is not None else []
+        if not data or len(data) == 0:
             raise HTTPException(status_code=404, detail="User not found in database")
 
-        return {"success": True, "user": user_response.data[0]}
+        return {"success": True, "user": data[0]}
 
     except HTTPException:
         raise
