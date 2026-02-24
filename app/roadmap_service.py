@@ -21,8 +21,8 @@ from app.services.roadmap_generation import (
     router as roadmap_gen_router,
 )
 from app.services.roadmap_generation import (
-    trigger_incremental_generation_sync,
-    trigger_roadmap_generation_sync,
+    run_incremental_concept_generation,
+    run_roadmap_generation,
 )
 
 # Configure logging
@@ -173,15 +173,14 @@ async def incremental_generate(
         logger.info(f"🔄 Starting incremental generation for project_id={request.project_id}")
         logger.debug(f"   Request payload: {request.model_dump()}")
 
-        # Use BackgroundTasks - sync wrapper runs in thread pool (asyncio.run works there)
-        # Cannot call asyncio.run() from async endpoint (already in event loop)
+        # Use async task directly - runs in same event loop (fixes "Event loop is closed")
         logger.info(
             f"📞 Adding incremental generation to background tasks for project_id={request.project_id}"
         )
         background_tasks.add_task(
-            trigger_incremental_generation_sync,
+            run_incremental_concept_generation,
             project_id=request.project_id,
-            user_id=request.user_id,
+            user_id_override=request.user_id,
         )
         logger.info(f"✅ Incremental generation task queued for project_id={request.project_id}")
 
@@ -247,10 +246,10 @@ async def generate_roadmap_internal(
         logger.info(f"   Skill Level: {request.skill_level}")
         logger.info(f"   Target Days: {request.target_days}")
 
-        # Use the sync wrapper which creates its own event loop
-        # This ensures the task completes even if Cloud Run scales down the container
+        # Use async task directly - runs in same event loop after response (no asyncio.run)
+        # Fixes "Event loop is closed" when pydantic_ai/GenAI client closes connections
         background_tasks.add_task(
-            trigger_roadmap_generation_sync,
+            run_roadmap_generation,
             project_id=request.project_id,
             github_url=request.github_url,
             skill_level=request.skill_level,

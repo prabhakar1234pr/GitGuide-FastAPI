@@ -152,7 +152,7 @@ class TestHTTPClientDelegation:
 
         with patch("app.config.settings.roadmap_service_url", "https://test-roadmap.run.app"):
             with patch("app.config.settings.internal_auth_token", None):
-                with pytest.raises(ValueError, match="Internal auth token not configured"):
+                with pytest.raises(ValueError, match="INTERNAL_AUTH_TOKEN not configured"):
                     import asyncio
 
                     asyncio.run(call_roadmap_service_incremental(project_id))
@@ -318,7 +318,7 @@ class TestRoadmapServiceHasLangGraph:
 
         # Should import LangGraph functions
         assert "run_roadmap_generation" in source
-        assert "trigger_incremental_generation_sync" in source
+        assert "run_incremental_concept_generation" in source
 
     def test_roadmap_service_has_all_endpoints(self):
         """Verify roadmap service has all required endpoints"""
@@ -402,7 +402,7 @@ class TestConfiguration:
             with patch("app.config.settings.internal_auth_token", None):
                 import asyncio
 
-                with pytest.raises(ValueError, match="Internal auth token not configured"):
+                with pytest.raises(ValueError, match="INTERNAL_AUTH_TOKEN not configured"):
                     asyncio.run(call_roadmap_service_incremental("test-project"))
 
 
@@ -425,4 +425,4 @@ class TestSyncWrapper:
                 result = call_roadmap_service_incremental_sync(project_id)
 
                 assert result["success"] is True
-                mock_async_call.assert_called_once_with(project_id)
+                mock_async_call.assert_called_once_with(project_id, None)

@@ -30,6 +30,9 @@ dependencies = [
     { name = "pydantic-ai-slim", extra = ["google", "groq"] },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-mock" },
     { name = "python-dotenv" },
     { name = "qdrant-client" },
     { name = "redis" },
@@ -45,10 +48,7 @@ dependencies = [
 [package.optional-dependencies]
 test = [
     { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "pytest-cov" },
-    { name = "pytest-mock" },
 ]
 
 [package.metadata]
@@ -72,10 +72,10 @@ requires-dist = [
     { name = "pydantic-ai-slim", extras = ["google", "groq"], specifier = ">=1.47.0" },
     { name = "pydantic-settings", specifier = ">=2.1.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21.0" },
+    { name = "pytest", specifier = ">=7.4.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.1.0" },
-    { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.12.0" },
+    { name = "pytest-mock", specifier = ">=3.12.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "qdrant-client", specifier = ">=1.16.2" },
     { name = "redis", specifier = ">=5.0.0" },
