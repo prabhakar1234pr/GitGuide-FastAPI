@@ -274,6 +274,7 @@ async def run_roadmap_agent(
     github_url: str,
     skill_level: str,
     target_days: int,
+    rag_chunks: list[dict] | None = None,
 ) -> dict:
     """
     Run the roadmap generation agent for a project.
@@ -343,6 +344,8 @@ async def run_roadmap_agent(
         }
 
         initial_state: RoadmapAgentState = {
+            # Pre-retrieved RAG chunks (from API; avoids embedding init in roadmap)
+            "rag_chunks": rag_chunks,
             # Input (immutable)
             "project_id": project_id,
             "github_url": github_url,

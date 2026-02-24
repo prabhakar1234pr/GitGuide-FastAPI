@@ -2,15 +2,23 @@
 Tests for QdrantService
 """
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+# Embedding dim from text-embedding-005 (default)
+EMBEDDING_DIM = 768
 
 
 class TestQdrantService:
     """Test cases for QdrantService"""
 
-    def test_ensure_collection_creates_new(self, mock_qdrant_client):
+    @patch("app.services.embedding_service.get_embedding_service")
+    def test_ensure_collection_creates_new(self, mock_get_embedding, mock_qdrant_client):
         """Test collection creation when it doesn't exist"""
         from app.services.qdrant_service import QdrantService
+
+        mock_embedding = Mock()
+        mock_embedding.embed_texts.return_value = [[0.1] * EMBEDDING_DIM]
+        mock_get_embedding.return_value = mock_embedding
 
         # Mock: collection doesn't exist
         mock_qdrant_client.get_collections.return_value.collections = []
@@ -21,16 +29,24 @@ class TestQdrantService:
         mock_qdrant_client.create_collection.assert_called_once()
         call_args = mock_qdrant_client.create_collection.call_args
         assert call_args[1]["collection_name"] == "gitguide_chunks"
-        assert call_args[1]["vectors_config"]["size"] == 384
+        assert call_args[1]["vectors_config"]["size"] == EMBEDDING_DIM
 
-    def test_ensure_collection_exists(self, mock_qdrant_client):
+    @patch("app.services.embedding_service.get_embedding_service")
+    def test_ensure_collection_exists(self, mock_get_embedding, mock_qdrant_client):
         """Test collection check when it already exists"""
         from app.services.qdrant_service import QdrantService
 
-        # Mock: collection exists
+        mock_embedding = Mock()
+        mock_embedding.embed_texts.return_value = [[0.1] * EMBEDDING_DIM]
+        mock_get_embedding.return_value = mock_embedding
+
+        # Mock: collection exists with matching dimension
         mock_collection = Mock()
         mock_collection.name = "gitguide_chunks"
         mock_qdrant_client.get_collections.return_value.collections = [mock_collection]
+        mock_coll_info = Mock()
+        mock_coll_info.config.params.vectors.size = EMBEDDING_DIM
+        mock_qdrant_client.get_collection.return_value = mock_coll_info
 
         QdrantService()
 

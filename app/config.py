@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     embedding_provider: str = (
         "gemini_api"  # vertex_ai, gemini_api (no GCP perms), openai, huggingface, local
     )
-    embedding_model_name: str = "gemini-embedding-001"  # Vertex AI model name (state-of-the-art, supports English, multilingual, and code)
+    embedding_model_name: str = "text-embedding-005"  # Vertex AI model (English+code; 768 dims; gemini-embedding-001/textembedding-gecko can 404)
     openai_embedding_model: str = "text-embedding-3-small"  # OpenAI model name
     openai_api_key: str | None = None  # Maps to OPENAI_API_KEY (for embeddings)
     huggingface_token: str | None = None  # Maps to HUGGINGFACE_TOKEN (for API access)

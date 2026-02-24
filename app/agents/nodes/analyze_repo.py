@@ -62,66 +62,74 @@ async def analyze_repository(state: RoadmapAgentState) -> RoadmapAgentState:
     logger.info("📚 Retrieving repository context with token budgeting...")
     logger.debug(f"   Token budget: {ANALYZE_REPO_TOKEN_BUDGET}, Max per chunk: {MAX_CHUNK_TOKENS}")
 
-    # Query for repository overview
-    rag_query = (
-        "What is this project about? What technologies, frameworks, and patterns does it use? "
-        "What is the overall architecture and structure?"
-    )
-
+    raw_chunks: list[dict] = []
     try:
-        # Step 1a: Generate embedding for query
-        embedding_service = get_embedding_service()
-        query_embeddings = embedding_service.embed_texts([rag_query])
+        # Use pre-retrieved chunks from API when available (avoids embedding init in roadmap)
+        pre_retrieved = state.get("rag_chunks")
+        if pre_retrieved:
+            raw_chunks = pre_retrieved
+            logger.info(f"   Using {len(raw_chunks)} pre-retrieved RAG chunks (from API)")
+        else:
+            # Query for repository overview
+            rag_query = (
+                "What is this project about? What technologies, frameworks, and patterns does it use? "
+                "What is the overall architecture and structure?"
+            )
 
-        if not query_embeddings or len(query_embeddings) == 0:
-            raise ValueError("Failed to generate embedding for query")
+            # Step 1a: Generate embedding for query
+            embedding_service = get_embedding_service()
+            query_embeddings = embedding_service.embed_texts([rag_query])
 
-        query_embedding = query_embeddings[0]
+            if not query_embeddings or len(query_embeddings) == 0:
+                raise ValueError("Failed to generate embedding for query")
 
-        # Step 1b: Search Qdrant for similar chunks (retrieve more than needed)
-        qdrant_service = get_qdrant_service()
-        search_results = qdrant_service.search(
-            project_id=project_id,
-            query_embedding=query_embedding,
-            limit=INITIAL_TOP_K,  # Retrieve more chunks initially
-        )
+            query_embedding = query_embeddings[0]
 
-        if not search_results:
-            raise ValueError(f"No chunks found for project {project_id}")
+            # Step 1b: Search Qdrant for similar chunks (retrieve more than needed)
+            qdrant_service = get_qdrant_service()
+            search_results = qdrant_service.search(
+                project_id=project_id,
+                query_embedding=query_embedding,
+                limit=INITIAL_TOP_K,  # Retrieve more chunks initially
+            )
 
-        logger.info(f"   Retrieved {len(search_results)} chunks from Qdrant (initial)")
+            if not search_results:
+                raise ValueError(f"No chunks found for project {project_id}")
 
-        # Step 1c: Get chunk content from Supabase
-        chunk_ids = [str(result.id) for result in search_results]
-        chunk_scores = {str(result.id): result.score for result in search_results}
+            logger.info(f"   Retrieved {len(search_results)} chunks from Qdrant (initial)")
 
-        supabase = get_supabase_client()
-        chunks_response = (
-            supabase.table("project_chunks")
-            .select("id, file_path, chunk_index, language, content, token_count")
-            .in_("id", chunk_ids)
-            .execute()
-        )
+            # Step 1c: Get chunk content from Supabase
+            chunk_ids = [str(result.id) for result in search_results]
+            chunk_scores = {str(result.id): result.score for result in search_results}
 
-        if not chunks_response.data:
-            raise ValueError("Chunks not found in Supabase")
+            supabase = get_supabase_client()
+            chunks_response = (
+                supabase.table("project_chunks")
+                .select("id, file_path, chunk_index, language, content, token_count")
+                .in_("id", chunk_ids)
+                .execute()
+            )
 
-        # Step 1d: Build chunk list with all metadata
-        raw_chunks = []
-        for chunk_id in chunk_ids:  # Maintain order from Qdrant (by similarity)
-            chunk_data = next((c for c in chunks_response.data if str(c["id"]) == chunk_id), None)
-            if chunk_data:
-                raw_chunks.append(
-                    {
-                        "id": chunk_id,
-                        "file_path": chunk_data["file_path"],
-                        "chunk_index": chunk_data["chunk_index"],
-                        "language": chunk_data["language"],
-                        "content": chunk_data["content"],
-                        "token_count": chunk_data["token_count"],
-                        "score": chunk_scores.get(chunk_id, 0.0),
-                    }
+            if not chunks_response.data:
+                raise ValueError("Chunks not found in Supabase")
+
+            # Step 1d: Build chunk list with all metadata
+            for chunk_id in chunk_ids:  # Maintain order from Qdrant (by similarity)
+                chunk_data = next(
+                    (c for c in chunks_response.data if str(c["id"]) == chunk_id), None
                 )
+                if chunk_data:
+                    raw_chunks.append(
+                        {
+                            "id": chunk_id,
+                            "file_path": chunk_data["file_path"],
+                            "chunk_index": chunk_data["chunk_index"],
+                            "language": chunk_data["language"],
+                            "content": chunk_data["content"],
+                            "token_count": chunk_data["token_count"],
+                            "score": chunk_scores.get(chunk_id, 0.0),
+                        }
+                    )
 
         # Step 1e: Apply token budgeting - select and truncate chunks
         selected_chunks = select_chunks_by_budget(

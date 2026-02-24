@@ -202,6 +202,7 @@ async def call_roadmap_service_generate(
     github_url: str,
     skill_level: str,
     target_days: int,
+    rag_chunks: list[dict] | None = None,
 ) -> dict:
     """
     Call the roadmap service to trigger full roadmap generation.
@@ -250,12 +251,14 @@ async def call_roadmap_service_generate(
 
     logger.info(f"🔐 Using X-Internal-Token (length: {len(settings.internal_auth_token)})")
     logger.info(f"🔐 Token (first 20 chars): {settings.internal_auth_token[:20]}...")
-    payload = {
+    payload: dict = {
         "project_id": project_id,
         "github_url": github_url,
         "skill_level": skill_level,
         "target_days": target_days,
     }
+    if rag_chunks is not None:
+        payload["rag_chunks"] = rag_chunks
 
     logger.info("=" * 70)
     logger.info("📞 CALLING ROADMAP SERVICE FOR FULL GENERATION")

@@ -89,6 +89,9 @@ class RoadmapAgentState(TypedDict):
     This state is passed between all LangGraph nodes.
     """
 
+    # ===== PRE-RETRIEVED RAG CHUNKS (from API, avoids embedding init in roadmap) =====
+    rag_chunks: list[dict] | None
+
     # ===== INPUT (Immutable) =====
     project_id: str
     github_url: str

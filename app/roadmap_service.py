@@ -145,6 +145,7 @@ class GenerateRoadmapInternalRequest(BaseModel):
     github_url: str
     skill_level: str
     target_days: int
+    rag_chunks: list[dict] | None = None  # Pre-retrieved by API; roadmap skips embedding init
 
 
 @app.post("/api/roadmap/incremental-generate", dependencies=[Depends(verify_internal_auth)])
@@ -254,6 +255,7 @@ async def generate_roadmap_internal(
             github_url=request.github_url,
             skill_level=request.skill_level,
             target_days=request.target_days,
+            rag_chunks=request.rag_chunks,
         )
 
         logger.info("✅ Background task added successfully")

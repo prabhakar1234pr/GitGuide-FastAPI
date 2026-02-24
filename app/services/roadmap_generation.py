@@ -91,6 +91,7 @@ async def run_roadmap_generation(
     github_url: str,
     skill_level: str,
     target_days: int,
+    rag_chunks: list[dict] | None = None,
 ):
     """
     Run the roadmap generation agent for a project.
@@ -128,6 +129,7 @@ async def run_roadmap_generation(
             github_url=github_url,
             skill_level=skill_level,
             target_days=target_days,
+            rag_chunks=rag_chunks,
         )
 
         logger.info(f"📊 Roadmap agent returned result: success={result.get('success')}")
@@ -175,6 +177,7 @@ def trigger_roadmap_generation_sync(
     github_url: str,
     skill_level: str,
     target_days: int,
+    rag_chunks: list[dict] | None = None,
 ):
     """
     Synchronous wrapper to trigger roadmap generation.
@@ -195,6 +198,7 @@ def trigger_roadmap_generation_sync(
             github_url=github_url,
             skill_level=skill_level,
             target_days=target_days,
+            rag_chunks=rag_chunks,
         )
     )
 
@@ -401,6 +405,7 @@ async def run_incremental_concept_generation(project_id: str, user_id_override: 
 
         # Build initial state for incremental generation
         initial_state: RoadmapAgentState = {
+            "rag_chunks": None,  # Not used for incremental generation
             "project_id": project_id,
             "github_url": github_url,
             "skill_level": skill_level,

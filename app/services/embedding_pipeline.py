@@ -211,6 +211,46 @@ async def run_embedding_pipeline(
             else ""
         )
 
+        # Step 6b: RAG retrieval for roadmap (avoids roadmap needing to init embedding service)
+        rag_chunks = None
+        try:
+            rag_query = (
+                "What is this project about? What technologies, frameworks, and patterns does it use? "
+                "What is the overall architecture and structure?"
+            )
+            query_embeddings = embedding_service.embed_texts([rag_query])
+            if query_embeddings and len(query_embeddings) > 0:
+                search_results = qdrant_service.search(
+                    project_id=project_id,
+                    query_embedding=query_embeddings[0],
+                    limit=15,
+                )
+                if search_results:
+                    chunk_id_to_chunk = {
+                        str(cid): c for cid, c in zip(chunk_ids, chunks, strict=True)
+                    }
+                    raw_chunks = []
+                    for result in search_results:
+                        cid = str(result.id)
+                        if cid in chunk_id_to_chunk:
+                            c = chunk_id_to_chunk[cid]
+                            raw_chunks.append(
+                                {
+                                    "id": cid,
+                                    "file_path": c["file_path"],
+                                    "chunk_index": c["chunk_index"],
+                                    "language": c["language"],
+                                    "content": c["content"],
+                                    "token_count": c["token_count"],
+                                    "score": getattr(result, "score", 0.0) or 0.0,
+                                }
+                            )
+                    if raw_chunks:
+                        rag_chunks = raw_chunks
+                        logger.info(f"✅ Pre-retrieved {len(rag_chunks)} RAG chunks for roadmap")
+        except Exception as rag_err:
+            logger.warning(f"⚠️  RAG pre-retrieval failed (roadmap will do its own): {rag_err}")
+
         # Step 7: mark project ready
         logger.info(f"✅ Step 7/7: Updating project status to 'ready' for project_id={project_id}")
         supabase.table("projects").update({"status": "ready"}).eq(
@@ -286,6 +326,7 @@ async def run_embedding_pipeline(
                             github_url=github_url,
                             skill_level=skill_level,
                             target_days=target_days,
+                            rag_chunks=rag_chunks,
                         )
                         logger.info(f"✅ Roadmap service HTTP call completed: {result}")
                         return result
