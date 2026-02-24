@@ -1,6 +1,9 @@
 """
 Repository context utilities for task generation.
 Builds context from NOTEBOOK REPO (user_repo_url), not textbook repo.
+
+Token budgeting: repo_structure and repo_code_context are truncated to stay
+under model input limits (e.g. 20K). Excludes node_modules, .git, etc.
 """
 
 import base64
@@ -10,8 +13,43 @@ from typing import Any
 import httpx
 
 from app.services.github_service import extract_repo_info
+from app.utils.text_chunking import count_tokens, truncate_to_tokens
 
 logger = logging.getLogger(__name__)
+
+# Exclude paths that bloat token count (node_modules, .git, venv, etc.)
+_REPO_STRUCTURE_EXCLUDE_PREFIXES = (
+    "node_modules/",
+    ".git/",
+    "venv/",
+    ".venv/",
+    "__pycache__/",
+    "dist/",
+    "build/",
+    ".next/",
+    ".nuxt/",
+    "coverage/",
+    ".cache/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    "vendor/",
+)
+
+# Max tokens for repo_structure to avoid exceeding model input limit (20K)
+REPO_STRUCTURE_MAX_TOKENS = 4_000
+REPO_CODE_CONTEXT_MAX_TOKENS = 2_000
+
+
+def _truncate_to_token_limit(text: str, max_tokens: int, label: str) -> str:
+    """Truncate text to max_tokens to avoid model input limit errors."""
+    if not text:
+        return text
+    tokens = count_tokens(text)
+    if tokens <= max_tokens:
+        return text
+    truncated = truncate_to_tokens(text, max_tokens)
+    logger.info(f"   Truncated {label}: {tokens} -> {max_tokens} tokens")
+    return truncated
 
 
 def _detect_test_structure(repo_files: list[dict[str, Any]]) -> dict[str, Any]:
@@ -225,13 +263,23 @@ async def build_notebook_repo_context_for_task_generation(
                 file_path = item.get("path", "")
                 item_type = item.get("type", "")
 
+                # Skip paths that bloat token count (node_modules, .git, etc.)
+                if any(
+                    file_path.startswith(p) or f"/{p}" in f"/{file_path}"
+                    for p in _REPO_STRUCTURE_EXCLUDE_PREFIXES
+                ):
+                    continue
+
                 if item_type == "tree":
                     repo_structure_parts.append(f"{file_path}/")
                 elif item_type == "blob":
                     repo_structure_parts.append(file_path)
                     files_by_path[file_path] = item
 
-            repo_structure = "\n".join(sorted(repo_structure_parts))
+            repo_structure_raw = "\n".join(sorted(repo_structure_parts))
+            repo_structure = _truncate_to_token_limit(
+                repo_structure_raw, REPO_STRUCTURE_MAX_TOKENS, "repo_structure"
+            )
 
             # Get file contents for key files (limit to avoid token bloat)
             key_files = [
@@ -268,10 +316,13 @@ async def build_notebook_repo_context_for_task_generation(
                                 }
                             )
 
-            repo_code_context = (
+            repo_code_context_raw = (
                 "\n".join(repo_code_context_parts)
                 if repo_code_context_parts
                 else "No key configuration files found"
+            )
+            repo_code_context = _truncate_to_token_limit(
+                repo_code_context_raw, REPO_CODE_CONTEXT_MAX_TOKENS, "repo_code_context"
             )
 
             # Detect test structure

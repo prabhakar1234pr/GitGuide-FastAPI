@@ -17,6 +17,16 @@ def count_tokens(text: str) -> int:
     return len(_tokenizer.encode(text))
 
 
+def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate text to at most max_tokens. Returns original if within limit."""
+    if not text:
+        return text
+    tokens = _tokenizer.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    return _tokenizer.decode(tokens[:max_tokens])
+
+
 def chunk_text(
     *,
     project_id: str,

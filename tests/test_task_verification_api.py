@@ -59,16 +59,6 @@ class TestTaskVerificationAPI:
     @pytest.mark.asyncio
     async def test_verify_task_success(self, mock_user, mock_workspace, mock_task, mock_project):
         """Test successful task verification."""
-        mock_evidence = {
-            "git_diff": "test diff",
-            "changed_files": ["file1.py"],
-            "file_contents": {"file1.py": "code"},
-            "test_results": {"success": True, "passed": True},
-            "ast_analysis": {},
-            "pattern_match_results": {},
-            "github_evidence": {},
-        }
-
         mock_verification_result = {
             "passed": True,
             "overall_feedback": "Great job!",
@@ -112,39 +102,31 @@ class TestTaskVerificationAPI:
                         mock_project
                     ]
 
-                    # Mock evidence collection
-                    with patch(
-                        "app.api.task_verification.VerificationEvidenceCollector"
-                    ) as mock_collector_class:
-                        mock_collector = mock_collector_class.return_value
-                        mock_collector.collect_all_evidence = AsyncMock(return_value=mock_evidence)
+                    # Mock VerificationAgent (task_verification uses VerificationAgent, not
+                    # VerificationEvidenceCollector/LLMVerifier)
+                    with patch("app.api.task_verification.VerificationAgent") as mock_agent_class:
+                        mock_agent = mock_agent_class.return_value
+                        mock_agent.verify_task = AsyncMock(return_value=mock_verification_result)
 
-                        # Mock LLM verifier
-                        with patch("app.api.task_verification.LLMVerifier") as mock_verifier_class:
-                            mock_verifier = mock_verifier_class.return_value
-                            mock_verifier.verify_with_evidence = AsyncMock(
-                                return_value=mock_verification_result
-                            )
-
-                            # Mock memory ledger update
+                        # Mock memory ledger update
+                        with patch(
+                            "app.api.task_verification._update_memory_ledger_on_task_pass",
+                            new_callable=AsyncMock,
+                        ):
+                            # Mock verification results save
                             with patch(
-                                "app.api.task_verification._update_memory_ledger_on_task_pass",
+                                "app.api.task_verification._save_verification_results",
                                 new_callable=AsyncMock,
                             ):
-                                # Mock verification results save
-                                with patch(
-                                    "app.api.task_verification._save_verification_results",
-                                    new_callable=AsyncMock,
-                                ):
-                                    response = client.post(
-                                        "/api/tasks/test_task_id/verify",
-                                        json={"workspace_id": "test_workspace_id"},
-                                        headers={"Authorization": "Bearer test_token"},
-                                    )
+                                response = client.post(
+                                    "/api/tasks/test_task_id/verify",
+                                    json={"workspace_id": "test_workspace_id"},
+                                    headers={"Authorization": "Bearer test_token"},
+                                )
 
-                                    # Note: This test may need adjustment based on actual auth setup
-                                    # The response might be 401 if auth isn't properly mocked
-                                    assert response.status_code in [200, 401, 403]
+                                # Note: This test may need adjustment based on actual auth setup
+                                # The response might be 401 if auth isn't properly mocked
+                                assert response.status_code in [200, 401, 403]
 
     @pytest.mark.asyncio
     async def test_verify_task_missing_workspace(self, mock_user):

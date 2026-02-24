@@ -88,6 +88,22 @@ class WorkspaceManager:
         """Generate a consistent volume name for a workspace."""
         return f"gitguide-vol-{workspace_id[:8]}"
 
+    def _allocate_ports(
+        self, start_port: int = 30001, search_range: int = 500
+    ) -> dict[str, tuple[str, int]]:
+        """
+        Find available host ports for all container ports in PORT_MAPPING.
+        Uses dynamic allocation to avoid port conflicts when multiple workspaces run.
+        """
+        ports = {}
+        base_port = start_port
+        for container_port in PORT_MAPPING.keys():
+            available = self.docker.find_available_port(base_port, base_port + search_range)
+            host_port = available if available is not None else PORT_MAPPING[container_port]
+            ports[f"{container_port}/tcp"] = ("0.0.0.0", host_port)
+            base_port = host_port + 1
+        return ports
+
     def create_workspace(self, user_id: str, project_id: str) -> Workspace:
         """
         Create a new workspace with a Docker container and persistent volume.
@@ -103,36 +119,27 @@ class WorkspaceManager:
         container_name = f"gitguide-ws-{workspace_id[:8]}"
         volume_name = self._get_volume_name(workspace_id)
 
-        # Default port mappings for local development
-        # Use ports 30001-30010 to avoid conflicts with common services (3000=frontend, 8000=backend API)
-        # Container ports map to host ports using centralized PORT_MAPPING configuration
-        default_ports = {
-            f"{container_port}/tcp": ("0.0.0.0", host_port)
-            for container_port, host_port in PORT_MAPPING.items()
-        }
+        # Dynamic port allocation - find available ports to avoid conflicts with other workspaces
+        ports = self._allocate_ports()
+        logger.info(f"Allocated ports for workspace {workspace_id[:8]}: {list(ports.values())}")
 
         # Create container with persistent volume and port mappings
         container_id, status = self.docker.create_container(
-            name=container_name, volume_name=volume_name, ports=default_ports
+            name=container_name, volume_name=volume_name, ports=ports
         )
 
         # Start container immediately
         success, is_port_conflict = self.docker.start_container(container_id)
         if not success and is_port_conflict:
-            # Port conflict - remove and retry with dynamically allocated ports
+            # Edge case: port became allocated between find and start - retry with fresh allocation
             logger.warning(
-                f"Container {container_id[:12]} failed to start (port conflict). Retrying with available ports..."
+                f"Container {container_id[:12]} failed to start (port conflict). Retrying with fresh port allocation..."
             )
             try:
                 self.docker.remove_container(container_id)
             except Exception:
                 pass
-            ports = {}
-            base_port = 30001
-            for cp in PORT_MAPPING.keys():
-                ap = self.docker.find_available_port(base_port, base_port + 100)
-                ports[f"{cp}/tcp"] = ("0.0.0.0", ap or PORT_MAPPING[cp])
-                base_port = (ap or PORT_MAPPING[cp]) + 1
+            ports = self._allocate_ports(start_port=30051, search_range=500)
             container_id, status = self.docker.create_container(
                 name=container_name, volume_name=volume_name, ports=ports
             )
@@ -299,7 +306,7 @@ class WorkspaceManager:
         return self.create_workspace(user_id, project_id)
 
     def _recreate_container(
-        self, workspace: Workspace, use_available_ports: bool = False
+        self, workspace: Workspace, use_available_ports: bool = True
     ) -> Workspace:
         """
         Recreate a container for an orphaned workspace.
@@ -307,7 +314,7 @@ class WorkspaceManager:
 
         Args:
             workspace: Existing workspace with missing container
-            use_available_ports: If True, find available ports dynamically instead of using PORT_MAPPING
+            use_available_ports: If True, find available ports dynamically (default: True)
 
         Returns:
             Updated Workspace object with new container
@@ -315,32 +322,13 @@ class WorkspaceManager:
         container_name = f"gitguide-ws-{workspace.workspace_id[:8]}"
         volume_name = self._get_volume_name(workspace.workspace_id)
 
-        # Port mappings for local development
+        # Port mappings - always use dynamic allocation by default
         if use_available_ports:
-            # Find available ports dynamically
-            logger.info("[RECREATE_CONTAINER] Finding available ports dynamically...")
-            ports = {}
-            base_port = 30001
-            for container_port in PORT_MAPPING.keys():
-                logger.debug(
-                    f"[RECREATE_CONTAINER] Looking for available port starting from {base_port} for container port {container_port}"
-                )
-                available_port = self.docker.find_available_port(base_port, base_port + 100)
-                if available_port:
-                    ports[f"{container_port}/tcp"] = ("0.0.0.0", available_port)
-                    logger.info(
-                        f"[RECREATE_CONTAINER] Mapped container port {container_port} to host port {available_port}"
-                    )
-                    base_port = available_port + 1
-                else:
-                    logger.warning(
-                        f"[RECREATE_CONTAINER] Could not find available port for container port {container_port}, using default {PORT_MAPPING[container_port]}"
-                    )
-                    ports[f"{container_port}/tcp"] = ("0.0.0.0", PORT_MAPPING[container_port])
-                    base_port = PORT_MAPPING[container_port] + 1
-            logger.info(f"[RECREATE_CONTAINER] Using dynamically allocated ports: {ports}")
+            ports = self._allocate_ports()
+            logger.info(
+                f"[RECREATE_CONTAINER] Using dynamically allocated ports: {list(ports.values())}"
+            )
         else:
-            # Use default port mappings from PORT_MAPPING configuration
             ports = {
                 f"{container_port}/tcp": ("0.0.0.0", host_port)
                 for container_port, host_port in PORT_MAPPING.items()
@@ -354,7 +342,7 @@ class WorkspaceManager:
         # Start container immediately
         success, is_port_conflict = self.docker.start_container(container_id)
         if not success and is_port_conflict and not use_available_ports:
-            # Port conflict with default ports - retry with dynamic port allocation
+            # Fallback: retry with dynamic port allocation
             logger.warning(
                 f"Container {container_id[:12]} failed to start (port conflict). Recreating with available ports..."
             )

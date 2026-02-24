@@ -70,7 +70,7 @@ class TestProjectsAPI:
             finally:
                 client.app.dependency_overrides.clear()
 
-    def test_create_project_invalid_url(self, client, mock_clerk_user):
+    def test_create_project_invalid_url(self, client, mock_supabase_client, mock_clerk_user):
         """Test POST /api/projects/create - invalid GitHub URL"""
 
         async def mock_verify_token(authorization=None):
@@ -89,7 +89,9 @@ class TestProjectsAPI:
         finally:
             client.app.dependency_overrides.clear()
 
-    def test_create_project_invalid_target_days(self, client, mock_clerk_user):
+    def test_create_project_invalid_target_days(
+        self, client, mock_supabase_client, mock_clerk_user
+    ):
         """Test POST /api/projects/create - invalid target_days"""
 
         async def mock_verify_token(authorization=None):
@@ -231,11 +233,23 @@ class TestProjectsAPI:
             {"project_id": str(uuid4()), "project_name": "repo2"},
         ]
 
+        project_access_chain = Mock()
+        project_access_chain.select.return_value = project_access_chain
+        project_access_chain.eq.return_value = project_access_chain
+        project_access_chain.execute.return_value.data = []
+
         def table_side_effect(table_name):
             if table_name == "projects":
                 mock_table2 = Mock()
                 mock_table2.select.return_value = mock_select_chain2
+                mock_table2.eq.return_value = mock_select_chain2
+                mock_table2.order.return_value = mock_select_chain2
+                mock_table2.in_ = Mock(return_value=mock_select_chain2)
                 return mock_table2
+            if table_name == "project_access":
+                mock_pa = Mock()
+                mock_pa.select.return_value = project_access_chain
+                return mock_pa
             return mock_table
 
         mock_supabase_client.table.side_effect = table_side_effect
@@ -285,12 +299,21 @@ class TestProjectsAPI:
         mock_delete_chain.eq.return_value = mock_delete_chain
         mock_delete_chain.execute.return_value = Mock()
 
+        workspaces_chain = Mock()
+        workspaces_chain.select.return_value = workspaces_chain
+        workspaces_chain.eq.return_value = workspaces_chain
+        workspaces_chain.execute.return_value.data = []
+
         def table_side_effect(table_name):
             if table_name == "projects":
                 mock_table2 = Mock()
                 mock_table2.select.return_value = mock_select_chain2
                 mock_table2.delete.return_value = mock_delete_chain
                 return mock_table2
+            if table_name == "workspaces":
+                mock_ws = Mock()
+                mock_ws.select.return_value = workspaces_chain
+                return mock_ws
             return mock_table
 
         mock_supabase_client.table.side_effect = table_side_effect

@@ -46,7 +46,9 @@ def start_task_session(
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Task sessions are for employees only - managers (project owners) cannot start them
-    _, is_owner = user_has_project_access(supabase, workspace.project_id, user_id)
+    has_access, is_owner = user_has_project_access(supabase, workspace.project_id, user_id)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Project access required")
     if is_owner:
         raise HTTPException(status_code=403, detail="Managers cannot start task sessions")
 

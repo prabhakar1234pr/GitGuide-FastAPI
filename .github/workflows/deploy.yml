@@ -104,6 +104,9 @@ jobs:
             GCP_LOCATION=${{ env.REGION }}
             EMBEDDING_PROVIDER=vertex_ai
             EMBEDDING_MODEL_NAME=text-embedding-005
+            CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            GEMINI_MODEL=${{ secrets.GEMINI_MODEL }}
             VERIFICATION_GCP_PROJECT_ID=${{ secrets.VERIFICATION_GCP_PROJECT_ID }}
             VERIFICATION_GCP_LOCATION=${{ secrets.VERIFICATION_GCP_LOCATION }}
             VERIFICATION_GEMINI_MODEL=${{ secrets.VERIFICATION_GEMINI_MODEL }}
@@ -118,6 +121,8 @@ jobs:
             GROQ_API_KEY2=${{ secrets.GROQ_API_KEY2 }}
             ROADMAP_SERVICE_URL=${{ secrets.ROADMAP_SERVICE_URL }}
             INTERNAL_AUTH_TOKEN=${{ secrets.INTERNAL_AUTH_TOKEN }}
+            FRONTEND_BASE_URL=${{ secrets.FRONTEND_BASE_URL }}
+            GIT_ACCESS_TOKEN=${{ secrets.GIT_ACCESS_TOKEN }}
 
       - name: Base64 encode GCP_SA_KEY
         id: encode-sa-key
@@ -150,6 +155,8 @@ jobs:
             GCP_LOCATION=${{ env.REGION }}
             EMBEDDING_PROVIDER=vertex_ai
             EMBEDDING_MODEL_NAME=text-embedding-005
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            GEMINI_MODEL=${{ secrets.ROADMAP_GEMINI_MODEL }}
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
             SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}
             DATABASE_URL=${{ secrets.DATABASE_URL }}

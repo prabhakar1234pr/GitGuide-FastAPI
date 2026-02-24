@@ -83,7 +83,8 @@ def user_has_project_access(supabase: Client, project_id: str, user_id: str) -> 
         .eq("user_id", user_id)
         .execute()
     )
-    if project_response.data and len(project_response.data) > 0:
+    proj_data = project_response.data if project_response.data is not None else []
+    if proj_data and len(proj_data) > 0:
         return True, True
 
     # Check project_access
@@ -94,7 +95,8 @@ def user_has_project_access(supabase: Client, project_id: str, user_id: str) -> 
         .eq("user_id", user_id)
         .execute()
     )
-    if access_response.data and len(access_response.data) > 0:
+    access_data = access_response.data if access_response.data is not None else []
+    if access_data and len(access_data) > 0:
         return True, False
 
     return False, False
@@ -117,8 +119,9 @@ def get_project_if_accessible(
         .eq("user_id", user_id)
         .execute()
     )
-    if project_response.data and len(project_response.data) > 0:
-        return project_response.data[0], True
+    proj_data = project_response.data if project_response.data is not None else []
+    if proj_data and len(proj_data) > 0:
+        return proj_data[0], True
 
     # Check project_access
     access_response = (
@@ -128,17 +131,19 @@ def get_project_if_accessible(
         .eq("user_id", user_id)
         .execute()
     )
-    if not access_response.data or len(access_response.data) == 0:
+    access_data = access_response.data if access_response.data is not None else []
+    if not access_data or len(access_data) == 0:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # User has access via grant - fetch project (any owner)
     project_response = (
         supabase.table("projects").select(select_fields).eq("project_id", project_id).execute()
     )
-    if not project_response.data or len(project_response.data) == 0:
+    proj_data2 = project_response.data if project_response.data is not None else []
+    if not proj_data2 or len(proj_data2) == 0:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    return project_response.data[0], False
+    return proj_data2[0], False
 
 
 def verify_project_and_get_user_id(

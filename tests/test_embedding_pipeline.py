@@ -90,10 +90,18 @@ class TestEmbeddingPipeline:
         mock_update_chain.execute.return_value = Mock()
         mock_table.update.return_value = mock_update_chain
 
-        # Mock GitHub service to raise error
-        with patch(
-            "app.services.embedding_pipeline.fetch_repository_files", new_callable=AsyncMock
-        ) as mock_fetch:
+        # Mock embedding/qdrant to avoid real model init before fetch fails
+        mock_embedding = Mock()
+        mock_qdrant = Mock()
+        with (
+            patch(
+                "app.services.embedding_pipeline.get_embedding_service", return_value=mock_embedding
+            ),
+            patch("app.services.embedding_pipeline.get_qdrant_service", return_value=mock_qdrant),
+            patch(
+                "app.services.embedding_pipeline.fetch_repository_files", new_callable=AsyncMock
+            ) as mock_fetch,
+        ):
             mock_fetch.side_effect = Exception("GitHub API error")
 
             with pytest.raises(Exception, match="GitHub API error"):
