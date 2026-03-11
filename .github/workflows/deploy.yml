@@ -123,6 +123,11 @@ jobs:
             INTERNAL_AUTH_TOKEN=${{ secrets.INTERNAL_AUTH_TOKEN }}
             FRONTEND_BASE_URL=${{ secrets.FRONTEND_BASE_URL }}
             GIT_ACCESS_TOKEN=${{ secrets.GIT_ACCESS_TOKEN }}
+            SMTP_HOST=${{ secrets.SMTP_HOST }}
+            SMTP_PORT=587
+            SMTP_USER=${{ secrets.SMTP_USER }}
+            SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+            SMTP_FROM_EMAIL=${{ secrets.SMTP_FROM_EMAIL }}
 
       - name: Base64 encode GCP_SA_KEY
         id: encode-sa-key
