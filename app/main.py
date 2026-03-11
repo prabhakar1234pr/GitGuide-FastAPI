@@ -135,7 +135,15 @@ if settings.environment == "production" and (
     _cors_origins = [
         "https://gitguide.dev",
         "https://www.gitguide.dev",
+        "https://crysivo.com",
+        "https://www.crysivo.com",
     ]
+elif settings.environment == "production" and isinstance(_cors_origins, list):
+    # Ensure crysivo.com is always allowed for g1901 frontend
+    _extra = ["https://crysivo.com", "https://www.crysivo.com"]
+    for o in _extra:
+        if o not in _cors_origins:
+            _cors_origins = _cors_origins + [o]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
