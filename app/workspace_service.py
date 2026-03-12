@@ -14,6 +14,7 @@ from app.api.files import router as files_router
 from app.api.git import router as git_router
 from app.api.preview import router as preview_router
 from app.api.task_sessions import router as task_sessions_router
+from app.api.task_verification import router as task_verification_router
 from app.api.terminal import router as terminal_router
 from app.api.workspaces import router as workspaces_router
 from app.config import settings
@@ -61,17 +62,20 @@ app = FastAPI(
 )
 
 # Add CORS middleware
-# Ensure production frontend domain is always allowed
+# Ensure production frontend domains are always allowed
 cors_origins = settings.cors_origins
+_extra = [
+    "https://gitguide.dev",
+    "https://www.gitguide.dev",
+    "https://crysivo.com",
+    "https://www.crysivo.com",
+]
 if isinstance(cors_origins, list):
-    # If it's a list, ensure https://gitguide.dev is included
-    if "*" not in cors_origins and "https://gitguide.dev" not in cors_origins:
-        cors_origins = cors_origins + ["https://gitguide.dev"]
+    for o in _extra:
+        if o not in cors_origins:
+            cors_origins = cors_origins + [o]
 elif cors_origins != "*":
-    # If it's a string and not "*", ensure https://gitguide.dev is included
-    cors_origins = ["https://gitguide.dev"] + (
-        [cors_origins] if isinstance(cors_origins, str) else cors_origins
-    )
+    cors_origins = _extra + ([cors_origins] if isinstance(cors_origins, str) else cors_origins)
 
 logger.info(f"CORS Origins configured: {cors_origins}")
 
@@ -90,6 +94,7 @@ app.include_router(terminal_router, prefix="/api/terminal", tags=["terminal"])
 app.include_router(preview_router, prefix="/api/preview", tags=["preview"])
 app.include_router(git_router, prefix="/api/git", tags=["git"])
 app.include_router(task_sessions_router, prefix="/api/task-sessions", tags=["task-sessions"])
+app.include_router(task_verification_router, prefix="/api/tasks", tags=["task-verification"])
 
 
 @app.get("/health")

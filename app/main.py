@@ -12,9 +12,8 @@ from app.api.projects import router as projects_router
 from app.api.roadmap import router as roadmap_router
 from app.api.routes import router
 
-# Task sessions router moved to workspace_service.py (requires Docker access)
+# Task sessions and task verification moved to workspace_service.py (requires Docker access)
 from app.api.task_chatbot import router as task_chatbot_router
-from app.api.task_verification import router as task_verification_router
 from app.api.users import router as users_router
 
 # Note: Workspace-related routes (workspaces, files, terminal, git, preview) are only
@@ -160,8 +159,7 @@ app.include_router(project_chunks_embeddings_router, prefix="/api/project_chunks
 app.include_router(roadmap_router, prefix="/api/roadmap", tags=["roadmap"])
 app.include_router(progress_router, prefix="/api/progress", tags=["progress"])
 app.include_router(github_consent_router, prefix="/api/github", tags=["github"])
-# Task sessions router moved to workspace_service.py (requires Docker access)
-app.include_router(task_verification_router, prefix="/api/tasks", tags=["task-verification"])
+# Task sessions and task verification run on workspace VM (requires Docker access)
 app.include_router(task_chatbot_router, prefix="/api/chatbot", tags=["task-chatbot"])
 # Workspace routes (workspaces, files, terminal, git, preview) are only available
 # on the VM service at http://35.222.130.245:8080
