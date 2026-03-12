@@ -418,6 +418,10 @@ async def list_user_projects(
 
 class GrantAccessRequest(BaseModel):
     email: str = Field(..., description="Employee email to grant access")
+    frontend_base_url: str | None = Field(
+        None,
+        description="Base URL for invite link (e.g. https://crysivo.com). Uses FRONTEND_BASE_URL if not provided.",
+    )
 
 
 INVITE_EXPIRY_HOURS = 168  # 7 days
@@ -495,8 +499,10 @@ async def grant_project_access(
                     raise
                 # Already granted - still send email
 
-        # Send access link via SMTP
-        base = settings.frontend_base_url.rstrip("/")
+        # Send access link via SMTP (use request origin if provided, else settings)
+        base = (body.frontend_base_url or settings.frontend_base_url or "").rstrip("/")
+        if not base:
+            base = "https://gitguide.dev"
         access_link = f"{base}/invite?token={token}"
         if not send_access_invite_email(email, access_link, project_name):
             return {
