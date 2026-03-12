@@ -82,19 +82,46 @@ async def sync_user(
             logger.info(f"Updated user: {clerk_user_id}")
             return {"success": True, "user": updated_user_response.data[0], "action": "updated"}
         else:
-            # Before creating: reject if email already exists with any role (prevents same email as manager and employee)
+            # Check if email already exists (same email, different clerk_user_id - e.g. new Clerk account)
             if email:
                 email_lower = email.strip().lower()
                 existing_by_email = (
-                    supabase.table("User").select("id, role").ilike("email", email_lower).execute()
+                    supabase.table("User")
+                    .select("id, role, clerk_user_id")
+                    .ilike("email", email_lower)
+                    .execute()
                 )
                 data = existing_by_email.data if existing_by_email.data is not None else []
                 if data and len(data) > 0:
-                    existing_role = data[0].get("role", "user")
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"This email is already registered as a {existing_role}. Sign in with your existing account—you cannot create a new account with a different role.",
+                    existing = data[0]
+                    existing_role = existing.get("role", "user")
+                    requested_role = role or "employee"
+                    if requested_role != existing_role:
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"This email is already registered as a {existing_role}. Sign in with your existing account—you cannot create a new account with a different role.",
+                        )
+                    # Same role: link this Clerk account to the existing user (clerk_user_id may have changed)
+                    update_data = {
+                        "clerk_user_id": clerk_user_id,
+                        "email": email,
+                        "name": name,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                    }
+                    updated_user_response = (
+                        supabase.table("User")
+                        .update(update_data)
+                        .eq("id", existing["id"])
+                        .execute()
                     )
+                    if not updated_user_response.data:
+                        raise HTTPException(status_code=500, detail="Failed to update user")
+                    logger.info(f"Linked Clerk {clerk_user_id} to existing user {existing['id']}")
+                    return {
+                        "success": True,
+                        "user": updated_user_response.data[0],
+                        "action": "updated",
+                    }
 
             # Create new user (default role: employee if not specified)
             new_user_data = {
