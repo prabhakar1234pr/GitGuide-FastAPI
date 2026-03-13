@@ -159,7 +159,7 @@ async def verify_task(
 
         proj = (
             supabase.table("projects")
-            .select("project_id, user_repo_url, github_url")
+            .select("project_id, user_repo_url, github_url, github_access_token")
             .eq("project_id", project_id)
             .execute()
         )
@@ -169,7 +169,7 @@ async def verify_task(
         repo_url = project.get("user_repo_url") or project.get("github_url")
         pa = (
             supabase.table("project_access")
-            .select("user_repo_url")
+            .select("user_repo_url, github_access_token")
             .eq("project_id", project_id)
             .eq("user_id", user_id)
             .execute()
@@ -183,8 +183,14 @@ async def verify_task(
                 detail="Project does not have a user repository URL (notebook repo)",
             )
 
-        # Use app's GitHub token from .env (not user's PAT)
-        github_token = settings.git_access_token
+        # Prefer user's PAT (for private repos); fall back to app's GIT_ACCESS_TOKEN
+        github_token = None
+        if pa.data and pa.data[0].get("github_access_token"):
+            github_token = pa.data[0]["github_access_token"]
+        elif project.get("github_access_token"):
+            github_token = project["github_access_token"]
+        if not github_token:
+            github_token = settings.git_access_token
 
         # Get base commit from task session (if exists)
         base_commit = None
@@ -469,7 +475,7 @@ async def verify_task(
             base_commit=base_commit,
             head_commit=head_commit,
             repo_url=repo_url,
-            github_token=github_token,  # App's token from .env (not user's PAT)
+            github_token=github_token,  # User's PAT or app's GIT_ACCESS_TOKEN
             additional_context={
                 "task_title": task.get("title", ""),
                 "task_type": task.get("task_type", ""),

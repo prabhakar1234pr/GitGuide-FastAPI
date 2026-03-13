@@ -449,6 +449,24 @@ class VerificationAgent:
                     f"         📋 Sample files: {', '.join(sample_names)}{'...' if len(files) > 10 else ''}"
                 )
 
+    def _extract_json_from_text(self, text: str) -> dict[str, Any] | None:
+        """Extract a JSON object from text using brace matching."""
+        start = text.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        for i, c in enumerate(text[start:], start):
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        return None
+        return None
+
     async def _parse_final_response(
         self, messages: list[dict[str, Any]], last_response: dict[str, Any]
     ) -> dict[str, Any]:
@@ -488,18 +506,13 @@ class VerificationAgent:
             )
         except Exception as e:
             logger.error(f"Failed to parse agent response as JSON: {e}")
-            logger.debug(f"Raw content: {content}")
-            # Try to extract JSON from markdown code blocks
-            import re
-
-            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-            if json_match:
-                try:
-                    verification_result = json.loads(json_match.group(1))
-                except json.JSONDecodeError:
-                    return self._create_error_response("Could not parse JSON from agent response")
-            else:
-                return self._create_error_response("Agent response is not valid JSON")
+            logger.debug(f"Raw content: {content[:500]}...")
+            # Fallback: extract JSON object by brace matching (handles nested JSON)
+            verification_result = self._extract_json_from_text(content)
+            if verification_result is None:
+                return self._create_error_response(
+                    "Agent response is not valid JSON. The model may have returned reasoning or markdown instead of raw JSON."
+                )
 
         # Enforce output schema (still allows your JSON parser/sanitizer fallback above)
         try:
