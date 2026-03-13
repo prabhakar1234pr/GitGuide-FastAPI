@@ -30,28 +30,28 @@ def send_access_invite_email(to_email: str, access_link: str, project_name: str)
         )
         return False
 
-    subject = f"You've been invited to access {project_name} on GitGuide"
+    subject = f"You've been invited to access {project_name} on Crysivo"
     html_body = f"""
-    <p>You've been invited to access the project <strong>{project_name}</strong> on GitGuide.</p>
+    <p>You've been invited to access the project <strong>{project_name}</strong> on Crysivo.</p>
     <p>Click the link below to get started:</p>
     <p><a href="{access_link}" style="display:inline-block;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:500;">Access Project</a></p>
     <p>Or copy this link: {access_link}</p>
     <p>If you didn't expect this invite, you can ignore this email.</p>
-    <p>— GitGuide</p>
+    <p>— Crysivo</p>
     """
     text_body = f"""
-You've been invited to access the project {project_name} on GitGuide.
+You've been invited to access the project {project_name} on Crysivo.
 
 Click this link to get started: {access_link}
 
 If you didn't expect this invite, you can ignore this email.
 
-— GitGuide
+— Crysivo
     """.strip()
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = settings.smtp_from_email or settings.smtp_user or "noreply@gitguide.dev"
+    msg["From"] = settings.smtp_from_email or settings.smtp_user or "noreply@crysivo.com"
     msg["To"] = to_email
     msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
