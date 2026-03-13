@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     gcp_location: str = (
         "global"  # Maps to GCP_LOCATION (default: global - required for Gemini models)
     )
-    gemini_model: str = "gemini-2.0-flash-001"  # Maps to GEMINI_MODEL (Vertex AI: gemini-2.0-flash-001, gemini-2.5-flash, gemini-2.5-pro)
+    gemini_model: str = "gemini-2.0-flash-001"  # Maps to GEMINI_MODEL (Vertex AI)
 
     # Verification (optional overrides to avoid sharing the same Gemini setup)
     # If set, the verification agent will use these instead of the default Gemini settings.
@@ -132,7 +132,9 @@ class Settings(BaseSettings):
     )
     verification_gcp_project_id: str | None = None  # VERIFICATION_GCP_PROJECT_ID
     verification_gcp_location: str | None = None  # VERIFICATION_GCP_LOCATION
-    verification_gemini_model: str | None = None  # VERIFICATION_GEMINI_MODEL
+    verification_gemini_model: str | None = (
+        "gemini-2.5-pro"  # VERIFICATION_GEMINI_MODEL (best for code verification)
+    )
 
     # GitHub API
     git_access_token: str | None = None  # Maps to GIT_ACCESS_TOKEN
