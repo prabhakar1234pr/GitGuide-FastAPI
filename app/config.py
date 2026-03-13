@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     gcp_location: str = (
         "global"  # Maps to GCP_LOCATION (default: global - required for Gemini models)
     )
-    gemini_model: str = "gemini-2.0-flash-exp"  # Maps to GEMINI_MODEL (Vertex AI: gemini-2.0-flash-exp, gemini-2.5-flash, gemini-2.5-pro)
+    gemini_model: str = "gemini-2.0-flash-001"  # Maps to GEMINI_MODEL (Vertex AI: gemini-2.0-flash-001, gemini-2.5-flash, gemini-2.5-pro)
 
     # Verification (optional overrides to avoid sharing the same Gemini setup)
     # If set, the verification agent will use these instead of the default Gemini settings.

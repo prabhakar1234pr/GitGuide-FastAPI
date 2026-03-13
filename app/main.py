@@ -66,7 +66,7 @@ async def lifespan(_app: FastAPI):
     else:
         logging.info("  🌟 Primary LLM: Gemini (Vertex AI)")
         logging.info(
-            f"  Gemini Model: {settings.gemini_model if hasattr(settings, 'gemini_model') else 'gemini-2.0-flash-exp'}"
+            f"  Gemini Model: {settings.gemini_model if hasattr(settings, 'gemini_model') else 'gemini-2.0-flash-001'}"
         )
         logging.info(
             f"  Gemini Auth: {'✓ Service Account (Vertex AI)' if settings.google_application_credentials else '✗ Not configured'}"

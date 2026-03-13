@@ -89,7 +89,7 @@ class GeminiService:
             effective_api_key = settings.gemini_api_key
 
         # Default model: gemini-2.x/2.5.x for Vertex AI
-        self.model = effective_model if effective_model else "gemini-2.0-flash-exp"
+        self.model = effective_model if effective_model else "gemini-2.0-flash-001"
         self.timeout = 180.0  # 180 seconds timeout
         self.rate_limiter = get_rate_limiter()
 
@@ -260,7 +260,7 @@ class GeminiService:
         This method uses your GCP free credits.
 
         Note: Vertex AI uses different model names than direct Gemini API:
-        - gemini-2.0-flash-exp (fast, cheap, supports function calling)
+        - gemini-2.0-flash-001 (fast, cheap, supports function calling)
         - gemini-2.5-pro (more capable, supports function calling)
         - gemini-2.5-flash (latest fast model)
         """
@@ -272,8 +272,9 @@ class GeminiService:
             # Note: Gemini 1.5 models were retired Sept 2025, use 2.0+ models
             model_name = self.model
             model_mapping = {
-                "gemini-pro": "gemini-2.0-flash-exp",  # Old model -> new model
-                "gemini-1.5-flash": "gemini-2.0-flash-exp",
+                "gemini-pro": "gemini-2.0-flash-001",
+                "gemini-1.5-flash": "gemini-2.0-flash-001",
+                "gemini-2.0-flash-exp": "gemini-2.0-flash-001",  # Retired
                 "gemini-1.5-pro": "gemini-2.5-pro",
             }
 
@@ -581,8 +582,9 @@ class GeminiService:
             # Map model name
             model_name = self.model
             model_mapping = {
-                "gemini-pro": "gemini-2.0-flash-exp",
-                "gemini-1.5-flash": "gemini-2.0-flash-exp",
+                "gemini-pro": "gemini-2.0-flash-001",
+                "gemini-1.5-flash": "gemini-2.0-flash-001",
+                "gemini-2.0-flash-exp": "gemini-2.0-flash-001",  # Retired
                 "gemini-1.5-pro": "gemini-2.5-pro",
             }
             if model_name in model_mapping:
