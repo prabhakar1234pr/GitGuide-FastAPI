@@ -162,4 +162,4 @@ app.include_router(github_consent_router, prefix="/api/github", tags=["github"])
 # Task sessions and task verification run on workspace VM (requires Docker access)
 app.include_router(task_chatbot_router, prefix="/api/chatbot", tags=["task-chatbot"])
 # Workspace routes (workspaces, files, terminal, git, preview) are only available
-# on the VM service at http://35.222.130.245:8080
+# on the VM service at http://35.192.92.135:8080

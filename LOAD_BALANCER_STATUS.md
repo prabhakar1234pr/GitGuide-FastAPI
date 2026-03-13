@@ -18,7 +18,7 @@
    - Name: `gitguide-workspaces`
    - Zone: `us-central1-a`
    - Status: RUNNING
-   - External IP: `35.222.130.245`
+   - External IP: `35.192.92.135`
    - Internal IP: `10.128.0.2`
 
 4. **URL Map**: ✅ Configured
