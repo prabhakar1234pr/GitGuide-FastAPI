@@ -427,6 +427,10 @@ async def terminal_websocket(
                             rows,
                         )
 
+                    elif msg_type == "ping":
+                        # Keepalive from client - respond to prevent load balancer timeout
+                        await websocket.send_json({"type": "pong"})
+
                 except WebSocketDisconnect:
                     logger.info(
                         f"[WS_DISCONNECT] WebSocket disconnected for session {session.session_id}"
