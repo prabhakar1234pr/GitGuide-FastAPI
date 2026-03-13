@@ -401,9 +401,18 @@ async def _compare_commits(
 
         except httpx.HTTPStatusError as e:
             logger.error(f"GitHub API error: {e.response.status_code} - {e.response.text}")
+            error_msg = f"GitHub API error: {e.response.status_code}"
+
+            if e.response.status_code == 401:
+                error_msg = "Authentication failed (401). The GitHub token is invalid or expired. Please check your GitHub connection."
+            elif e.response.status_code == 403:
+                error_msg = "Access denied (403). The GitHub token does not have permission to access this repository. If the repository is private, please ensure you have connected your GitHub account with a Personal Access Token (PAT) that has 'repo' scope."
+            elif e.response.status_code == 404:
+                error_msg = "Repository or commit not found (404). Please check if the repository exists and is accessible."
+
             return {
                 "success": False,
-                "error": f"GitHub API error: {e.response.status_code}",
+                "error": error_msg,
                 "details": e.response.text[:500],
             }
         except Exception as e:
@@ -463,10 +472,19 @@ async def _get_file_contents(
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return {"success": False, "error": "File not found"}
+
             logger.error(f"GitHub API error: {e.response.status_code} - {e.response.text}")
+            error_msg = f"GitHub API error: {e.response.status_code}"
+
+            if e.response.status_code == 401:
+                error_msg = "Authentication failed (401). The GitHub token is invalid or expired."
+            elif e.response.status_code == 403:
+                error_msg = "Access denied (403). The GitHub token does not have permission to access this file."
+
             return {
                 "success": False,
-                "error": f"GitHub API error: {e.response.status_code}",
+                "error": error_msg,
+                "details": e.response.text[:500],
             }
         except Exception as e:
             logger.error(f"Failed to get file contents: {e}", exc_info=True)
@@ -542,10 +560,19 @@ async def _get_commit_details(
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return {"success": False, "error": "Commit not found"}
+
             logger.error(f"GitHub API error: {e.response.status_code} - {e.response.text}")
+            error_msg = f"GitHub API error: {e.response.status_code}"
+
+            if e.response.status_code == 401:
+                error_msg = "Authentication failed (401). The GitHub token is invalid or expired."
+            elif e.response.status_code == 403:
+                error_msg = "Access denied (403). The GitHub token does not have permission to access this commit."
+
             return {
                 "success": False,
-                "error": f"GitHub API error: {e.response.status_code}",
+                "error": error_msg,
+                "details": e.response.text[:500],
             }
         except Exception as e:
             logger.error(f"Failed to get commit details: {e}", exc_info=True)
@@ -613,9 +640,17 @@ async def _list_changed_files(
 
         except httpx.HTTPStatusError as e:
             logger.error(f"GitHub API error: {e.response.status_code} - {e.response.text}")
+            error_msg = f"GitHub API error: {e.response.status_code}"
+
+            if e.response.status_code == 401:
+                error_msg = "Authentication failed (401). The GitHub token is invalid or expired."
+            elif e.response.status_code == 403:
+                error_msg = "Access denied (403). The GitHub token does not have permission to list changed files."
+
             return {
                 "success": False,
-                "error": f"GitHub API error: {e.response.status_code}",
+                "error": error_msg,
+                "details": e.response.text[:500],
             }
         except Exception as e:
             logger.error(f"Failed to list changed files: {e}", exc_info=True)
@@ -684,10 +719,19 @@ async def _list_repository_files(
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return {"success": False, "error": "Commit or branch not found"}
+
             logger.error(f"GitHub API error: {e.response.status_code} - {e.response.text}")
+            error_msg = f"GitHub API error: {e.response.status_code}"
+
+            if e.response.status_code == 401:
+                error_msg = "Authentication failed (401). The GitHub token is invalid or expired."
+            elif e.response.status_code == 403:
+                error_msg = "Access denied (403). The GitHub token does not have permission to list repository files."
+
             return {
                 "success": False,
-                "error": f"GitHub API error: {e.response.status_code}",
+                "error": error_msg,
+                "details": e.response.text[:500],
             }
         except Exception as e:
             logger.error(f"Failed to list repository files: {e}", exc_info=True)

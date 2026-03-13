@@ -94,7 +94,9 @@ Your task is to verify if code changes between two commits fulfill the given tas
 - "issues_found": ONLY actual problems that prevent code from working (bugs, syntax errors, missing functionality)
 - "suggestions": Optional improvements and best practices (NOT issues)
 
-**When you have enough information, return ONLY valid JSON (no markdown, no extra text):**
+**OUTPUT FORMAT (MANDATORY):**
+You must return ONLY a valid JSON object. Do not include any markdown formatting (like ```json ... ```), reasoning text, or explanations outside the JSON object.
+
 {
   "passed": true/false,
   "overall_feedback": "2-3 sentence summary explaining decision",
@@ -109,7 +111,7 @@ Your task is to verify if code changes between two commits fulfill the given tas
   "code_quality": "good/acceptable/needs_improvement"
 }
 
-**IMPORTANT**: Use tools to gather information first, then provide your verification decision."""
+**IMPORTANT**: Use tools to gather information first. Once you have enough information, output the FINAL JSON immediately."""
 
 
 class VerificationAgent:
